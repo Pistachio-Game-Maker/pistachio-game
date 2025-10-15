@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pistachio - Online Multiplayer Card Game</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyAP5BJbHJXE2qlxF7xZ3LZU7wUHMiae4Q0",
+      authDomain: "pistachio-80ed1.firebaseapp.com",
+      databaseURL: "https://pistachio-80ed1-default-rtdb.firebaseio.com",
+      projectId: "pistachio-80ed1",
+      storageBucket: "pistachio-80ed1.firebasestorage.app",
+      messagingSenderId: "1065517356603",
+      appId: "1:1065517356603:web:22f17f20546ce44e7fae1e"
+    };
+
+    // Initialize Firebase
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const database = firebase.database();
+
+    // Card definitions
+    const CARD_DECK = [
+      { type: 'pistachio', count: 13, category: 'edible' },
+      { type: 'pesky', count: 8, category: 'edible' },
+      { type: 'shell', count: 12, category: 'shell' },
+      { type: 'loose', count: 4, category: 'edible' },
+      { type: 'golden', count: 3, category: 'edible' },
+      { type: 'raisin', count: 1, category: 'edible' },
+      { type: 'moldy', count: 5, category: 'moldy' },
+      { type: 'spillBowl', count: 2, category: 'special' },
+      { type: 'fast', count: 5, category: 'special' },
+      { type: 'raccoon', count: 5, category: 'special' },
+      { type: 'picky', count: 4, category: 'special' },
+      { type: 'slap', count: 8, category: 'special' },
+      { type: 'caffeinated', count: 6, category: 'special' },
+      { type: 'donate', count: 5, category: 'special' },
+      { type: 'nutcracker', count: 0, category: 'tool' },
+      { type: 'gorilla', count: 0, category: 'tool' }
+    ];
+
+    const PLAYER_COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b'];
+
+    const createDeck = (playerCount) => {
+      const deck = [];
+      CARD_DECK.forEach(card => {
+        let count = card.count;
+        if (card.type === 'nutcracker' || card.type === 'gorilla') {
+          count = playerCount;
+        }
+        for (let i = 0; i < count; i++) {
+          deck.push({ ...card, id: `${card.type}-${Math.random().toString(36).substr(2, 9)}` });
+        }
+      });
+      return shuffleDeck(deck);
+    };
+
+    const shuffleDeck = (deck) => {
+      const shuffled = [...deck];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled;
+    };
+
+    const generateRoomCode = () => {
+      return Math.random().toString(36).substring(2, 8).toUpperCase();
+    };
+
+    function PistachioGame() {
+      const [screen, setScreen] = useState('menu');
+      const [roomCode, setRoomCode] = useState('');
+      const [joinCode, setJoinCode] = useState('');
+      const [playerName, setPlayerName] = useState('');
+      const [playerId, setPlayerId] = useState('');
+      const [gameState, setGameState] = useState(null);
+      const [copied, setCopied] = useState(false);
+      const [error, setError] = useState('');
+
+      useEffect(() => {
+        if (!playerId) {
+          setPlayerId(`player-${Date.now()}-${Math.random().toString(36).substring(7)}`);
+        }
+      }, []);
+
+      useEffect(() => {
+        if (!roomCode) return;
+
+        const gameRef = database.ref(`games/${roomCode}`);
+        const listener = gameRef.on('value', (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            setGameState(data);
+            if (data.status === 'playing' && screen !== 'game') {
+              setScreen('game');
+            }
+          }
+        });
+
+        return () => gameRef.off('value', listener);
+      }, [roomCode]);
+
+      const createGame = async () => {
+        if (!playerName.trim()) {
+          setError('Please enter your name');
+          return;
+        }
+        
+        const code = generateRoomCode();
+        const newGame = {
+          roomCode: code,
+          players: {},
+          host: playerId,
+          status: 'lobby',
+          deck: [],
+          goldenDeck: [],
+          discardPile: [],
+          shellBowl: [],
+          hungerMarker: false,
+          currentPlayerIndex: 0,
+          turnPhase: 'draw',
+          createdAt: Date.now()
+        };
+
+        newGame.players[playerId] = {
+          id: playerId,
+          name: playerName,
+          hand: [],
+          energyTokens: 10,
+          colorIndex: 0,
+          goldenShells: [],
+          tools: [],
+          connected: true
+        };
+
+        try {
+          await database.ref(`games/${code}`).set(newGame);
+          setRoomCode(code);
+          setScreen('lobby');
+          setError('');
+        } catch (err) {
+          setError('Failed to create game: ' + err.message);
+        }
+      };
+
+      const joinGame = async () => {
+        if (!playerName.trim() || !joinCode.trim()) {
+          setError('Please enter your name and room code');
+          return;
+        }
+        
+        const code = joinCode.toUpperCase();
+        
+        try {
+          const gameRef = database.ref(`games/${code}`);
+          const snapshot = await gameRef.once('value');
+          const game = snapshot.val();
+          
+          if (!game) {
+            setError('Game not found');
+            return;
+          }
+
+          if (game.status !== 'lobby') {
+            setError('Game already started');
+            return;
+          }
+
+          const playerCount = Object.keys(game.players).length;
+          if (playerCount >= 4) {
+            setError('Game is full');
+            return;
+          }
+
+          const colorIndex = playerCount;
+          const newPlayer = {
+            id: playerId,
+            name: playerName,
+            hand: [],
+            energyTokens: 10,
+            colorIndex,
+            goldenShells: [],
+            tools: [],
+            connected: true
+          };
+
+          await database.ref(`games/${code}/players/${playerId}`).set(newPlayer);
+          setRoomCode(code);
+          setScreen('lobby');
+          setError('');
+        } catch (err) {
+          setError('Failed to join game: ' + err.message);
+        }
+      };
+
+      const startGame = async () => {
+        if (!gameState) return;
+        
+        const playerCount = Object.keys(gameState.players).length;
+        if (playerCount < 3) {
+          setError('Need at least 3 players to start!');
+          return;
+        }
+
+        const deck = createDeck(playerCount);
+        const goldenDeck = [];
+        for (let i = 0; i < 9; i++) {
+          goldenDeck.push({ type: 'goldenShell', category: 'golden', id: `golden-${i}` });
+        }
+        const firstPlayerIndex = Math.floor(Math.random() * playerCount);
+
+        try {
+          await database.ref(`games/${roomCode}`).update({
+            status: 'playing',
+            deck,
+            goldenDeck: shuffleDeck(goldenDeck),
+            currentPlayerIndex: firstPlayerIndex,
+            turnPhase: 'draw'
+          });
+          setError('');
+        } catch (err) {
+          setError('Failed to start game: ' + err.message);
+        }
+      };
+
+      const drawCard = async () => {
+        if (!gameState) return;
+        
+        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+        const currentPlayer = players[gameState.currentPlayerIndex];
+        
+        if (currentPlayer.id !== playerId) return;
+        if (!gameState.deck || gameState.deck.length === 0) {
+          setError('Deck is empty!');
+          return;
+        }
+
+        const myPlayer = gameState.players[playerId];
+        const cardsToDraw = myPlayer.tools?.includes('gorilla') ? 2 : 1;
+        const newDeck = [...gameState.deck];
+        const drawnCards = newDeck.splice(0, Math.min(cardsToDraw, newDeck.length));
+        const newHand = [...(myPlayer.hand || []), ...drawnCards];
+
+        const moldyCards = drawnCards.filter(card => card.type === 'moldy');
+        
+        if (moldyCards.length > 0) {
+          const edibles = newHand.filter(card => 
+            ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(card.type)
+          );
+          
+          if (edibles.length > 0) {
+            const discardCard = edibles[0];
+            const finalHand = newHand.filter(card => card.id !== discardCard.id && card.type !== 'moldy');
+            const newDiscard = [...(gameState.discardPile || []), ...moldyCards, discardCard];
+            
+            await database.ref(`games/${roomCode}`).update({
+              [`players/${playerId}/hand`]: finalHand,
+              deck: newDeck,
+              discardPile: newDiscard,
+              currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+              turnPhase: 'draw'
+            });
+          } else {
+            const finalHand = newHand.filter(card => card.type !== 'moldy');
+            const newDiscard = [...(gameState.discardPile || []), ...moldyCards];
+            
+            await database.ref(`games/${roomCode}`).update({
+              [`players/${playerId}/hand`]: finalHand,
+              deck: newDeck,
+              discardPile: newDiscard,
+              currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+              turnPhase: 'draw'
+            });
+          }
+        } else {
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            deck: newDeck,
+            currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+            turnPhase: 'draw',
+            hungerMarker: false
+          });
+        }
+      };
+
+      const playCard = async (cardIndex) => {
+        if (!gameState) return;
+        
+        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+        const currentPlayer = players[gameState.currentPlayerIndex];
+        if (currentPlayer.id !== playerId) return;
+
+        const myPlayer = gameState.players[playerId];
+        const card = myPlayer.hand[cardIndex];
+        if (!card) return;
+
+        const newHand = myPlayer.hand.filter((_, i) => i !== cardIndex);
+        const newDiscard = [...(gameState.discardPile || []), card];
+
+        if (card.category === 'tool') {
+          const newTools = [...(myPlayer.tools || []), card.type];
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            [`players/${playerId}/tools`]: newTools,
+            discardPile: newDiscard
+          });
+        } else if (card.category === 'edible') {
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            hungerMarker: true
+          });
+
+          if (card.type === 'golden') {
+            const newGoldenDeck = [...(gameState.goldenDeck || [])];
+            const goldenShell = newGoldenDeck.shift();
+            if (goldenShell) {
+              const newGoldenShells = [...(myPlayer.goldenShells || []), goldenShell];
+              await database.ref(`games/${roomCode}`).update({
+                [`players/${playerId}/goldenShells`]: newGoldenShells,
+                goldenDeck: newGoldenDeck
+              });
+
+              if (newGoldenShells.length >= 3) {
+                await database.ref(`games/${roomCode}`).update({
+                  status: 'finished',
+                  winner: playerId,
+                  winType: 'golden'
+                });
+              }
+            }
+
+            const updates = {};
+            for (const pid in gameState.players) {
+              if (pid !== playerId && gameState.players[pid].connected && !gameState.players[pid].eliminated) {
+                const player = gameState.players[pid];
+                const newTokens = Math.max(0, player.energyTokens - 1);
+                updates[`players/${pid}/energyTokens`] = newTokens;
+                
+                if (newTokens === 0) {
+                  updates[`players/${pid}/eliminated`] = true;
+                }
+              }
+            }
+            if (Object.keys(updates).length > 0) {
+              await database.ref(`games/${roomCode}`).update(updates);
+            }
+          } else if (card.type === 'raisin') {
+            const newTokens = Math.min(10, myPlayer.energyTokens + 1);
+            await database.ref(`games/${roomCode}/players/${playerId}/energyTokens`).set(newTokens);
+          }
+        } else {
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard
+          });
+        }
+      };
+
+      const useShellBowl = async () => {
+        if (!gameState) return;
+        
+        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+        const currentPlayer = players[gameState.currentPlayerIndex];
+        if (currentPlayer.id !== playerId) return;
+
+        const myPlayer = gameState.players[playerId];
+        if (myPlayer.energyTokens <= 0) {
+          setError('No energy tokens left!');
+          return;
+        }
+        if ((gameState.shellBowl || []).length >= 5) {
+          setError('Shell bowl is full!');
+          return;
+        }
+
+        const shells = (myPlayer.hand || []).filter(card => card.type === 'shell');
+        if (shells.length === 0) {
+          setError('No shells to discard!');
+          return;
+        }
+
+        const newHand = (myPlayer.hand || []).filter(card => card.type !== 'shell');
+        const newShellBowl = [...(gameState.shellBowl || []), myPlayer.colorIndex];
+        const newTokens = myPlayer.energyTokens - 1;
+
+        await database.ref(`games/${roomCode}`).update({
+          [`players/${playerId}/hand`]: newHand,
+          [`players/${playerId}/energyTokens`]: newTokens,
+          shellBowl: newShellBowl,
+          discardPile: [...(gameState.discardPile || []), ...shells]
+        });
+
+        if (newTokens === 0) {
+          await database.ref(`games/${roomCode}/players/${playerId}/eliminated`).set(true);
+        }
+      };
+
+      const leaveGame = async () => {
+        if (roomCode && playerId) {
+          await database.ref(`games/${roomCode}/players/${playerId}/connected`).set(false);
+        }
+        setScreen('menu');
+        setRoomCode('');
+        setGameState(null);
+      };
+
+      const copyRoomCode = () => {
+        navigator.clipboard.writeText(roomCode);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      };
+
+      // Menu Screen
+      if (screen === 'menu') {
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-amber-900 via-yellow-800 to-amber-900 flex items-center justify-center p-4">
+            <div className="bg-amber-50 rounded-3xl shadow-2xl p-8 max-w-md w-full border-4 border-amber-900">
+              <div className="text-center mb-8">
+                <h1 className="text-5xl font-black text-amber-900 mb-2">PISTACHIO</h1>
+                <p className="text-amber-700 font-medium">Online Multiplayer Card Game</p>
+              </div>
+
+              {error && (
+                <div className="bg-red-100 border-2 border-red-400 text-red-700 px-4 py-3 rounded-xl mb-4 text-sm">
+                  {error}
+                </div>
+              )}
+
+              <div className="space-y-4 mb-6">
+                <input
+                  type="text"
+                  placeholder="Enter your name"
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-amber-300 focus:border-amber-500 focus:outline-none text-lg"
+                  maxLength={20}
+                />
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={createGame}
+                  disabled={!playerName.trim()}
+                  className="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-colors text-lg"
+                >
+                  👥 Create Game
+                </button>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-amber-300"></div>
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-amber-50 text-amber-600 font-medium">OR</span>
+                  </div>
+                </div>
+
+                <input
+                  type="text"
+                  placeholder="Enter room code"
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-amber-300 focus:border-amber-500 focus:outline-none text-lg text-center font-bold uppercase"
+                  maxLength={6}
+                />
+
+                <button
+                  onClick={joinGame}
+                  disabled={!playerName.trim() || !joinCode.trim()}
+                  className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-colors text-lg"
+                >
+                  ▶️ Join Game
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // Lobby Screen
+      if (screen === 'lobby' && gameState) {
+        const players = Object.values(gameState.players).filter(p => p.connected);
+        
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-amber-900 via-yellow-800 to-amber-900 flex items-center justify-center p-4">
+            <div className="bg-amber-50 rounded-3xl shadow-2xl p-8 max-w-2xl w-full border-4 border-amber-900">
+              <div className="flex justify-between items-start mb-6">
+                <div className="text-center flex-1">
+                  <h2 className="text-3xl font-black text-amber-900 mb-2">Game Lobby</h2>
+                  <div className="flex items-center justify-center gap-2 mb-4">
+                    <div className="bg-amber-900 text-amber-50 px-6 py-2 rounded-xl text-2xl font-black tracking-wider">
+                      {roomCode}
+                    </div>
+                    <button
+                      onClick={copyRoomCode}
+                      className="p-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors"
+                    >
+                      {copied ? '✓' : '📋'}
+                    </button>
+                  </div>
+                  <p className="text-amber-700">Share this code with your friends!</p>
+                </div>
+                <button
+                  onClick={leaveGame}
+                  className="p-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                >
+                  🚪
+                </button>
+              </div>
+
+              {error && (
+                <div className="bg-red-100 border-2 border-red-400 text-red-700 px-4 py-3 rounded-xl mb-4 text-sm">
+                  {error}
+                </div>
+              )}
+
+              <div className="bg-white rounded-xl p-6 mb-6">
+                <h3 className="font-bold text-xl text-amber-900 mb-4">Players ({players.length}/4)</h3>
+                <div className="space-y-2">
+                  {players.map((player) => (
+                    <div key={player.id} className="flex items-center gap-3 p-3 bg-amber-50 rounded-lg">
+                      <div 
+                        className="w-8 h-8 rounded-full" 
+                        style={{ backgroundColor: PLAYER_COLORS[player.colorIndex] }}
+                      />
+                      <span className="font-bold text-lg">{player.name}</span>
+                      {player.id === gameState.host && (
+                        <span className="ml-auto bg-amber-600 text-white px-2 py-1 rounded text-xs font-bold">
+                          HOST
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {playerId === gameState.host && (
+                <button
+                  onClick={startGame}
+                  disabled={players.length < 3}
+                  className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-colors text-lg"
+                >
+                  {players.length < 3 
+                    ? `Need ${3 - players.length} more player(s)` 
+                    : '🎮 Start Game'}
+                </button>
+              )}
+
+              {playerId !== gameState.host && (
+                <div className="text-center text-amber-700 font-medium">
+                  Waiting for host to start the game...
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // Game Screen
+      if (screen === 'game' && gameState) {
+        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+        const currentPlayer = players[gameState.currentPlayerIndex];
+        const myPlayer = gameState.players[playerId];
+        const isMyTurn = currentPlayer?.id === playerId;
+
+        if (gameState.status === 'finished') {
+          const winner = gameState.players[gameState.winner];
+          return (
+            <div className="min-h-screen bg-gradient-to-br from-yellow-400 via-yellow-500 to-yellow-600 flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl shadow-2xl p-12 max-w-2xl w-full border-4 border-yellow-700 text-center">
+                <h1 className="text-6xl font-black text-yellow-900 mb-4">🎉 GAME OVER! 🎉</h1>
+                <h2 className="text-4xl font-bold text-yellow-800 mb-8">{winner?.name} WINS!</h2>
+                <p className="text-xl text-gray-700 mb-8">
+                  {gameState.winType === 'golden' ? 'Collected 3 Golden Shells!' : 'Last Player Standing!'}
+                </p>
+                <button
+                  onClick={() => {
+                    setScreen('menu');
+                    setRoomCode('');
+                    setGameState(null);
+                  }}
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-4 px-8 rounded-xl text-lg"
+                >
+                  Back to Menu
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-green-900 via-emerald-800 to-green-900 p-4">
+            <div className="max-w-7xl mx-auto">
+              {/* Header */}
+              <div className="bg-amber-50 rounded-2xl shadow-lg p-4 mb-4 border-2 border-amber-900">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h1 className="text-2xl font-black text-amber-900">PISTACHIO</h1>
+                    <p className="text-sm text-amber-700">Room: {roomCode}</p>
+                  </div>
+                  <div className="text-center flex-1">
+                    <div className="text-lg font-bold text-amber-900">
+                      {isMyTurn ? "🔥 YOUR TURN 🔥" : `${currentPlayer?.name}'s Turn`}
+                    </div>
+                  </div>
+                  <button
+                    onClick={leaveGame}
+                    className="p-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                  >
+                    🚪
+                  </button>
+                </div>
+              </div>
+
+              {error && (
+                <div className="bg-red-100 border-2 border-red-400 text-red-700 px-4 py-3 rounded-xl mb-4 text-sm">
+                  {error}
+                </div>
+              )}
+
+              {/* Game Board */}
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                {/* Main Deck */}
+                <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
+                  <h3 className="font-bold text-amber-900 mb-2">Main Deck</h3>
+                  <div className="relative">
+                    <div className="w-32 h-44 bg-gradient-to-br from-amber-700 to-amber-900 rounded-lg shadow-lg flex items-center justify-center border-4 border-amber-950">
+                      <div className="text-white font-black text-4xl">{gameState.deck?.length || 0}</div>
+                    </div>
+                    {gameState.hungerMarker && (
+                      <div className="absolute -top-2 -right-2 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold animate-pulse">
+                        HUNGER
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Discard & Shell Bowl */}
+                <div className="space-y-4">
+                  <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
+                    <h3 className="font-bold text-amber-900 mb-2">Discard</h3>
+                    <div className="w-32 h-44 bg-gray-300 rounded-lg shadow-lg flex items-center justify-center border-2 border-gray-400">
+                      {gameState.discardPile?.length > 0 ? (
+                        <div className="text-gray-700 font-bold text-xs text-center p-2">
+                          {gameState.discardPile[gameState.discardPile.length - 1].type.toUpperCase()}
+                        </div>
+                      ) : (
+                        <div className="text-gray-500 text-sm">Empty</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
+                    <h3 className="font-bold text-amber-900 mb-2">Shell Bowl</h3>
+                    <div className="flex gap-1">
+                      {[0,1,2,3,4].map(i => (
+                        <div 
+                          key={i}
+                          className="w-6 h-6 rounded-full border-2"
+                          style={
+                            i < (gameState.shellBowl?.length || 0)
+                              ? { backgroundColor: PLAYER_COLORS[gameState.shellBowl[i]], borderColor: '#78350f' }
+                              : { backgroundColor: 'white', borderColor: '#fbbf24' }
+                          }
+                        />
+                      ))}
+                    </div>
+                    <div className="text-xs text-amber-700 mt-1">{gameState.shellBowl?.length || 0}/5</div>
+                  </div>
+                </div>
+
+                {/* Golden Deck */}
+                <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
+                  <h3 className="font-bold text-amber-900 mb-2">Golden Shells</h3>
+                  <div className="w-32 h-44 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-lg shadow-lg flex items-center justify-center border-4 border-yellow-700">
+                    <div className="text-yellow-900 font-black text-4xl">{gameState.goldenDeck?.length || 0}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Other Players */}
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                {players.filter(p => p.id !== playerId).map((player) => (
+                  <div key={player.id} className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div 
+                        className="w-6 h-6 rounded-full" 
+                        style={{ backgroundColor: PLAYER_COLORS[player.colorIndex] }}
+                      />
+                      <h3 className="font-bold text-amber-900">{player.name}</h3>
+                    </div>
+                    <div className="text-sm space-y-1">
+                      <div>⚡ Energy: {player.energyTokens}/10</div>
+                      <div>🃏 Cards: {player.hand?.length || 0}</div>
+                      <div>✨ Golden: {player.goldenShells?.length || 0}</div>
+                      {player.tools && player.tools.length > 0 && (
+                        <div className="flex gap-1 mt-2 flex-wrap">
+                          {player.tools.map((tool, i) => (
+                            <div key={i} className="text-xs bg-amber-200 px-2 py-1 rounded">
+                              {tool}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* My Hand */}
+              {myPlayer && (
+                <div className="bg-amber-50 rounded-2xl p-6 border-4 border-amber-900">
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="flex items-center gap-3">
+                      <div 
+                        className="w-8 h-8 rounded-full" 
+                        style={{ backgroundColor: PLAYER_COLORS[myPlayer.colorIndex] }}
+                      />
+                      <h3 className="font-bold text-xl text-amber-900">{myPlayer.name} (You)</h3>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <div className="text-sm text-amber-700">Energy</div>
+                        <div className="text-2xl font-black text-amber-900">{myPlayer.energyTokens}/10</div>
+                      </div>
+                      {myPlayer.goldenShells && myPlayer.goldenShells.length > 0 && (
+                        <div className="text-right">
+                          <div className="text-sm text-amber-700">Golden Shells</div>
+                          <div className="text-2xl font-black text-yellow-600">{myPlayer.goldenShells.length}/3</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {myPlayer.tools && myPlayer.tools.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-sm text-amber-700 mb-2">Tools in Play:</div>
+                      <div className="flex gap-2">
+                        {myPlayer.tools.map((tool, i) => (
+                          <div key={i} className="bg-amber-600 text-white px-3 py-1 rounded-lg font-bold">
+                            {tool.toUpperCase()}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="text-sm text-amber-700 mb-2">
+                    Your Hand ({myPlayer.hand?.length || 0} cards) - Limit: {myPlayer.tools?.includes('gorilla') ? 7 : 5}
+                  </div>
+                  
+                  {(!myPlayer.hand || myPlayer.hand.length === 0) ? (
+                    <div className="text-center py-8 text-amber-600">
+                      {isMyTurn ? 'Draw a card to start your turn!' : 'No cards in hand'}
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 flex-wrap">
+                      {myPlayer.hand.map((card, idx) => (
+                        <button
+                          key={card.id}
+                          onClick={() => playCard(idx)}
+                          className="w-24 h-32 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 border-yellow-700 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={!isMyTurn}
+                        >
+                          <div className="text-center px-1">
+                            <div className="font-black text-xs text-yellow-900 break-words">
+                              {card.type.toUpperCase()}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {isMyTurn && (
+                    <div className="mt-4 flex gap-2">
+                      <button 
+                        onClick={drawCard}
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition-colors"
+                      >
+                        🎴 Draw Card (End Turn)
+                      </button>
+                      <button 
+                        onClick={useShellBowl}
+                        disabled={(gameState.shellBowl?.length || 0) >= 5}
+                        className="px-6 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                      >
+                        🥜 Shell Bowl
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      return null;
+    }
+
+    ReactDOM.render(<PistachioGame />, document.getElementById('root'));
+  </script>
+</body>
+</html>
