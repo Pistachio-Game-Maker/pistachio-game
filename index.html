@@ -35,6 +35,28 @@
     }
     const database = firebase.database();
 
+    // Card image mapping
+    const CARD_IMAGES = {
+      pistachio: 'images/cards/pistachio.png',
+      pesky: 'images/cards/pesky.png',
+      shell: 'images/cards/shell.png',
+      loose: 'images/cards/loose.png',
+      golden: 'images/cards/golden.png',
+      raisin: 'images/cards/raisin.png',
+      moldy: 'images/cards/moldy.png',
+      goldenShell: 'images/cards/goldenShell.png',
+      nutcracker: 'images/cards/nutcracker.png',
+      gorilla: 'images/cards/gorilla.png',
+      slap: 'images/cards/slap.png',
+      picky: 'images/cards/picky.png',
+      raccoon: 'images/cards/raccoon.png',
+      spillBowl: 'images/cards/spillBowl.png',
+      fast: 'images/cards/fast.png',
+      caffeinated: 'images/cards/caffeinated.png',
+      donate: 'images/cards/donate.png',
+      cardBack: 'images/cards/cardBack.png'
+    };
+
     // Card definitions
     const CARD_DECK = [
       { type: 'pistachio', count: 13, category: 'edible' },
@@ -702,8 +724,22 @@
                 <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                   <h3 className="font-bold text-amber-900 mb-2">Main Deck</h3>
                   <div className="relative">
-                    <div className="w-32 h-44 bg-gradient-to-br from-amber-700 to-amber-900 rounded-lg shadow-lg flex items-center justify-center border-4 border-amber-950">
-                      <div className="text-white font-black text-4xl">{gameState.deck?.length || 0}</div>
+                    <div className="w-32 h-44 bg-gradient-to-br from-amber-700 to-amber-900 rounded-lg shadow-lg flex items-center justify-center border-4 border-amber-950 overflow-hidden">
+                      <img 
+                        src="images/cards/cardBack.png" 
+                        alt="Card Back" 
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'flex';
+                        }}
+                      />
+                      <div className="text-white font-black text-4xl absolute" style={{display: 'none'}}>
+                        {gameState.deck?.length || 0}
+                      </div>
+                    </div>
+                    <div className="absolute bottom-2 right-2 bg-black bg-opacity-75 text-white px-2 py-1 rounded text-sm font-bold">
+                      {gameState.deck?.length || 0}
                     </div>
                     {gameState.hungerMarker && (
                       <div className="absolute -top-2 -right-2 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold animate-pulse">
@@ -717,14 +753,21 @@
                 <div className="space-y-4">
                   <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                     <h3 className="font-bold text-amber-900 mb-2">Discard</h3>
-                    <div className="w-32 h-44 bg-gray-300 rounded-lg shadow-lg flex items-center justify-center border-2 border-gray-400">
+                    <div className="w-32 h-44 bg-gray-300 rounded-lg shadow-lg flex items-center justify-center border-2 border-gray-400 overflow-hidden">
                       {gameState.discardPile?.length > 0 ? (
-                        <div className="text-gray-700 font-bold text-xs text-center p-2">
-                          {gameState.discardPile[gameState.discardPile.length - 1].type.toUpperCase()}
-                        </div>
-                      ) : (
-                        <div className="text-gray-500 text-sm">Empty</div>
-                      )}
+                        <img 
+                          src={CARD_IMAGES[gameState.discardPile[gameState.discardPile.length - 1].type] || 'images/cards/cardBack.png'}
+                          alt={gameState.discardPile[gameState.discardPile.length - 1].type}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                            e.target.nextSibling.style.display = 'block';
+                          }}
+                        />
+                      ) : null}
+                      <div className="text-gray-500 text-sm" style={{display: gameState.discardPile?.length > 0 ? 'none' : 'block'}}>
+                        Empty
+                      </div>
                     </div>
                   </div>
 
@@ -750,8 +793,24 @@
                 {/* Golden Deck */}
                 <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                   <h3 className="font-bold text-amber-900 mb-2">Golden Shells</h3>
-                  <div className="w-32 h-44 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-lg shadow-lg flex items-center justify-center border-4 border-yellow-700">
-                    <div className="text-yellow-900 font-black text-4xl">{gameState.goldenDeck?.length || 0}</div>
+                  <div className="relative">
+                    <div className="w-32 h-44 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-lg shadow-lg flex items-center justify-center border-4 border-yellow-700 overflow-hidden">
+                      <img 
+                        src="images/cards/goldenShell.png" 
+                        alt="Golden Shell" 
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'flex';
+                        }}
+                      />
+                      <div className="text-yellow-900 font-black text-4xl absolute" style={{display: 'none'}}>
+                        {gameState.goldenDeck?.length || 0}
+                      </div>
+                    </div>
+                    <div className="absolute bottom-2 right-2 bg-black bg-opacity-75 text-white px-2 py-1 rounded text-sm font-bold">
+                      {gameState.goldenDeck?.length || 0}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -810,7 +869,22 @@
                     </div>
                   </div>
 
-                  {myPlayer.tools && myPlayer.tools.length > 0 && (
+                  {myPlayer.goldenShells && myPlayer.goldenShells.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-sm text-amber-700 mb-2">Your Golden Shells:</div>
+                      <div className="flex gap-2">
+                        {myPlayer.goldenShells.map((shell, i) => (
+                          <div key={i} className="w-16 h-20 rounded-lg overflow-hidden border-2 border-yellow-600 shadow-lg">
+                            <img 
+                              src="images/cards/goldenShell.png" 
+                              alt="Golden Shell" 
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                     <div className="mb-4">
                       <div className="text-sm text-amber-700 mb-2">Tools in Play:</div>
                       <div className="flex gap-2">
@@ -866,12 +940,26 @@
                         <button
                           key={card.id}
                           onClick={() => playCard(idx)}
-                          className="w-24 h-32 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 border-yellow-700 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="w-24 h-32 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 border-yellow-700 overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed relative"
                           disabled={!isMyTurn}
                         >
-                          <div className="text-center px-1">
-                            <div className="font-black text-xs text-yellow-900 break-words">
-                              {card.type.toUpperCase()}
+                          <img 
+                            src={CARD_IMAGES[card.type] || 'images/cards/cardBack.png'}
+                            alt={card.type}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                              e.target.nextSibling.style.display = 'flex';
+                            }}
+                          />
+                          <div 
+                            className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center"
+                            style={{display: 'none'}}
+                          >
+                            <div className="text-center px-1">
+                              <div className="font-black text-xs text-yellow-900 break-words">
+                                {card.type.toUpperCase()}
+                              </div>
                             </div>
                           </div>
                         </button>
