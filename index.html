@@ -1,4 +1,74 @@
-<!DOCTYPE html>
+                      {/* Pending Donate Action */}
+                      {gameState.pendingAction && gameState.pendingAction.type === 'donate' && gameState.pendingAction.playerId === playerId && (
+                        <div className="bg-blue-50 border-2 border-blue-400 rounded-xl p-4">
+                          <div className="text-center mb-3">
+                            <h4 className="text-lg font-bold text-blue-900">
+                              🎁 DONATE {gameState.pendingAction.cardsToGive === 2 && '☕ CAFFEINATED'}
+                            </h4>
+                            <p className="text-sm text-blue-700 mt-1">
+                              Step 1: Click {gameState.pendingAction.cardsToGive} card{gameState.pendingAction.cardsToGive > 1 ? 's' : ''} from your hand to select
+                            </p>
+                            <p className="text-sm text-blue-700">
+                              Step 2: Click a player to give {gameState.pendingAction.cardsToGive > 1 ? 'them' : 'it'} to
+                            </p>
+                          </div>
+                          
+                          {gameState.pendingAction.selectedCardIndex !== undefined && (
+                            <div className="mb-3 text-center">
+                              <p className="text-sm font-bold text-blue-900">
+                                Selected: {myPlayer.hand[gameState.pendingAction.selectedCardIndex]?.type.toUpperCase()}
+                              </p>
+                            </div>
+                          )}
+
+                          {gameState.pendingAction.selectedCardIndex === undefined ? (
+                            <div>
+                              <p className="text-xs text-center text-blue-600 mb-2">Click a card above to select it</p>
+                              <button
+                                onClick={async () => {
+                                  await database.ref(`games/${roomCode}/pendingAction`).set(null);
+                                }}
+                                className="w-full bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 rounded-lg text-sm"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div>
+                              <div className="grid grid-cols-3 gap-2 mb-2">
+                                {players.filter(p => p.id !== playerId).map((player) => (
+                                  <button
+                                    key={player.id}
+                                    onClick={async () => {
+                                      const cardIndex = gameState.pendingAction.selectedCardIndex;
+                                      const cardToGive = myPlayer.hand[cardIndex];
+                                      const newMyHand = myPlayer.hand.filter((_, i) => i !== cardIndex);
+                                      const newTheirHand = [...(player.hand || []), cardToGive];
+                                      
+                                      await database.ref(`games/${roomCode}`).update({
+                                        [`players/${playerId}/hand`]: newMyHand,
+                                        [`players/${player.id}/hand`]: newTheirHand,
+                                        pendingAction: null
+                                      });
+                                    }}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-lg transition-colors text-sm"
+                                  >
+                                    Give to {player.name}
+                                  </button>
+                                ))}
+                              </div>
+                              <button
+                                onClick={async () => {
+                                  await database.ref(`games/${roomCode}/pendingAction`).set(null);
+                                }}
+                                className="w-full bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 rounded-lg text-sm"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -114,6 +184,7 @@
       const [gameState, setGameState] = useState(null);
       const [copied, setCopied] = useState(false);
       const [error, setError] = useState('');
+      const [slapWindowTimer, setSlapWindowTimer] = useState(null);
 
       useEffect(() => {
         if (!playerId) {
@@ -378,7 +449,76 @@
         }
       };
 
-      const playCard = async (cardIndex) => {
+      const playSlap = async (isCaffeinated = false) => {
+        if (!gameState) return;
+        
+        const myPlayer = gameState.players[playerId];
+        
+        // Check if player has a slap card
+        const slapCard = myPlayer.hand.find(c => c.type === 'slap');
+        if (!slapCard) {
+          setError('No slap card in hand!');
+          return;
+        }
+        
+        // Check if we need caffeine
+        if (gameState.slapWindow.requiresCaffeine && !isCaffeinated) {
+          setError('This requires a caffeinated slap!');
+          return;
+        }
+        
+        // If caffeinated, check for caffeine card
+        let caffeineCard = null;
+        if (isCaffeinated) {
+          caffeineCard = myPlayer.hand.find(c => c.type === 'caffeinated');
+          if (!caffeineCard) {
+            setError('No caffeine card in hand!');
+            return;
+          }
+        }
+        
+        // Remove cards from hand
+        let newHand = myPlayer.hand.filter(c => c.id !== slapCard.id);
+        if (caffeineCard) {
+          newHand = newHand.filter(c => c.id !== caffeineCard.id);
+        }
+        
+        // Add slap to discard
+        const cardsToDiscard = isCaffeinated ? [slapCard, caffeineCard] : [slapCard];
+        
+        // Record the slap
+        await database.ref(`games/${roomCode}`).update({
+          [`players/${playerId}/hand`]: newHand,
+          discardPile: [...(gameState.discardPile || []), ...cardsToDiscard],
+          'slapWindow/slappedBy': playerId,
+          'slapWindow/slappedAt': Date.now(),
+          'slapWindow/wasCaffeinated': isCaffeinated
+        });
+      };
+
+      const resolveAction = async () => {
+        if (!gameState || !gameState.slapWindow) return;
+        
+        const slapWindow = gameState.slapWindow;
+        
+        // Check if action was slapped
+        if (slapWindow.slappedBy) {
+          // Action was cancelled!
+          setError(`${gameState.players[slapWindow.slappedBy].name} slapped the action!`);
+          
+          await database.ref(`games/${roomCode}`).update({
+            slapWindow: null
+          });
+        } else {
+          // Action goes through - execute the original action
+          const action = slapWindow.action;
+          
+          // Execute based on action type (we'll implement this)
+          await database.ref(`games/${roomCode}`).update({
+            slapWindow: null
+          });
+        }
+      };
         if (!gameState) return;
         
         const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
@@ -425,6 +565,36 @@
               type: 'donate',
               playerId: playerId,
               cardsToGive: 1
+            }
+          });
+          return;
+        }
+
+        // PICKY
+        if (card.type === 'picky') {
+          const topCards = gameState.deck.slice(0, 3);
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            pendingAction: {
+              type: 'picky',
+              playerId: playerId,
+              topCards: topCards,
+              reorderedCards: null
+            }
+          });
+          return;
+        }
+
+        // RACCOON
+        if (card.type === 'raccoon') {
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            pendingAction: {
+              type: 'raccoon',
+              playerId: playerId,
+              action: null // 'stealCard' or 'stealFromDiscard'
             }
           });
           return;
@@ -990,12 +1160,44 @@
                       {isMyTurn ? 'Draw a card to start your turn!' : 'No cards in hand'}
                     </div>
                   ) : (
-                    <div className="flex gap-2 flex-wrap">
-                      {myPlayer.hand.map((card, idx) => (
+                    <>
+                      {selectedCaffeineIndex !== null && (
+                        <div className="mb-3 p-3 bg-yellow-100 border-2 border-yellow-500 rounded-lg text-center">
+                          <p className="text-sm font-bold text-yellow-900">
+                            ☕ CAFFEINE SELECTED! Click another card to play it caffeinated.
+                          </p>
+                          <button
+                            onClick={() => {
+                              setSelectedCaffeineIndex(null);
+                              setError('');
+                            }}
+                            className="mt-2 text-xs bg-gray-400 hover:bg-gray-500 text-white px-3 py-1 rounded"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                      
+                      <div className="flex gap-2 flex-wrap">
+                        {myPlayer.hand.map((card, idx) => (
                         <button
                           key={card.id}
-                          onClick={() => playCard(idx)}
-                          className="w-24 h-32 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 border-yellow-700 overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed relative"
+                          onClick={async () => {
+                            // If in donate mode, select this card
+                            if (gameState.pendingAction?.type === 'donate' && gameState.pendingAction.playerId === playerId) {
+                              await database.ref(`games/${roomCode}/pendingAction/selectedCardIndex`).set(idx);
+                            } else {
+                              // Normal play card
+                              playCard(idx);
+                            }
+                          }}
+                          className={`w-24 h-32 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed relative ${
+                            gameState.pendingAction?.selectedCardIndex === idx 
+                              ? 'border-blue-500 border-4 ring-2 ring-blue-400' 
+                              : selectedCaffeineIndex === idx
+                              ? 'border-yellow-500 border-4 ring-2 ring-yellow-400'
+                              : 'border-yellow-700'
+                          }`}
                           disabled={!isMyTurn}
                         >
                           <img 
@@ -1020,6 +1222,7 @@
                         </button>
                       ))}
                     </div>
+                  </>
                   )}
 
                   {isMyTurn && (
