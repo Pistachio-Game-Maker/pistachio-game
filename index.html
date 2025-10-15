@@ -37,24 +37,24 @@
 
     // Card image mapping
     const CARD_IMAGES = {
-      pistachio: 'images/cards/pistachio.png',
-      pesky: 'images/cards/pesky.png',
-      shell: 'images/cards/shell.png',
-      loose: 'images/cards/loose.png',
-      golden: 'images/cards/golden.png',
-      raisin: 'images/cards/raisin.png',
-      moldy: 'images/cards/moldy.png',
-      goldenShell: 'images/cards/goldenShell.png',
-      nutcracker: 'images/cards/nutcracker.png',
-      gorilla: 'images/cards/gorilla.png',
-      slap: 'images/cards/slap.png',
-      picky: 'images/cards/picky.png',
-      raccoon: 'images/cards/raccoon.png',
-      spillBowl: 'images/cards/spillBowl.png',
-      fast: 'images/cards/fast.png',
-      caffeinated: 'images/cards/caffeinated.png',
-      donate: 'images/cards/donate.png',
-      cardBack: 'images/cards/cardBack.png'
+      pistachio: 'images/cards/pistachio.PNG',
+      pesky: 'images/cards/pesky.PNG',
+      shell: 'images/cards/shell.PNG',
+      loose: 'images/cards/loose.PNG',
+      golden: 'images/cards/golden.PNG',
+      raisin: 'images/cards/raisin.PNG',
+      moldy: 'images/cards/moldy.PNG',
+      goldenShell: 'images/cards/goldenShell.PNG',
+      nutcracker: 'images/cards/nutcracker.PNG',
+      gorilla: 'images/cards/gorilla.PNG',
+      slap: 'images/cards/slap.PNG',
+      picky: 'images/cards/picky.PNG',
+      raccoon: 'images/cards/raccoon.PNG',
+      spillBowl: 'images/cards/spillBowl.PNG',
+      fast: 'images/cards/fast.PNG',
+      caffeinated: 'images/cards/caffeinated.PNG',
+      donate: 'images/cards/donate.PNG',
+      cardBack: 'images/cards/cardBack.PNG'
     };
 
     // Card definitions
@@ -726,7 +726,7 @@
                   <div className="relative">
                     <div className="w-32 h-44 bg-gradient-to-br from-amber-700 to-amber-900 rounded-lg shadow-lg flex items-center justify-center border-4 border-amber-950 overflow-hidden">
                       <img 
-                        src="images/cards/cardBack.png" 
+                        src="images/cards/cardBack.PNG" 
                         alt="Card Back" 
                         className="w-full h-full object-cover"
                         onError={(e) => {
@@ -756,7 +756,7 @@
                     <div className="w-32 h-44 bg-gray-300 rounded-lg shadow-lg flex items-center justify-center border-2 border-gray-400 overflow-hidden">
                       {gameState.discardPile?.length > 0 ? (
                         <img 
-                          src={CARD_IMAGES[gameState.discardPile[gameState.discardPile.length - 1].type] || 'images/cards/cardBack.png'}
+                          src={CARD_IMAGES[gameState.discardPile[gameState.discardPile.length - 1].type] || 'images/cards/cardBack.PNG'}
                           alt={gameState.discardPile[gameState.discardPile.length - 1].type}
                           className="w-full h-full object-cover"
                           onError={(e) => {
@@ -796,7 +796,7 @@
                   <div className="relative">
                     <div className="w-32 h-44 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-lg shadow-lg flex items-center justify-center border-4 border-yellow-700 overflow-hidden">
                       <img 
-                        src="images/cards/goldenShell.png" 
+                        src="images/cards/goldenShell.PNG" 
                         alt="Golden Shell" 
                         className="w-full h-full object-cover"
                         onError={(e) => {
@@ -876,7 +876,7 @@
                         {myPlayer.goldenShells.map((shell, i) => (
                           <div key={i} className="w-16 h-20 rounded-lg overflow-hidden border-2 border-yellow-600 shadow-lg">
                             <img 
-                              src="images/cards/goldenShell.png" 
+                              src="images/cards/goldenShell.PNG" 
                               alt="Golden Shell" 
                               className="w-full h-full object-cover"
                             />
@@ -944,7 +944,7 @@
                           disabled={!isMyTurn}
                         >
                           <img 
-                            src={CARD_IMAGES[card.type] || 'images/cards/cardBack.png'}
+                            src={CARD_IMAGES[card.type] || 'images/cards/cardBack.PNG'}
                             alt={card.type}
                             className="w-full h-full object-cover"
                             onError={(e) => {
