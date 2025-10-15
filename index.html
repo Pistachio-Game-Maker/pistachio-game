@@ -1010,6 +1010,34 @@
                     </div>
                   )}
 
+                  {isMyTurn && myPlayer.hand && (() => {
+                    const handLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+                    const overCount = myPlayer.hand.length - handLimit;
+                    return overCount > 0 && (
+                      <div className="bg-orange-50 border-2 border-orange-400 rounded-xl p-4 mb-4">
+                        <div className="text-center">
+                          <h4 className="text-lg font-bold text-orange-900">⚠️ OVERENCUMBERED! ⚠️</h4>
+                          <p className="text-sm text-orange-700 mt-1">
+                            You have {myPlayer.hand.length} cards (limit: {handLimit})
+                          </p>
+                          <p className="text-sm text-orange-700 mb-3">
+                            You must pay {overCount} energy token{overCount > 1 ? 's' : ''} to start your turn
+                          </p>
+                          <button 
+                            onClick={handleOverencumbered}
+                            disabled={myPlayer.energyTokens < overCount}
+                            className="bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-xl transition-colors"
+                          >
+                            💰 Pay {overCount} Token{overCount > 1 ? 's' : ''}
+                          </button>
+                          {myPlayer.energyTokens < overCount && (
+                            <p className="text-xs text-red-600 mt-2">Not enough energy tokens!</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="text-sm text-amber-700 mb-2">
                     Your Hand ({myPlayer.hand?.length || 0} cards) - Limit: {myPlayer.tools?.includes('gorilla') ? 7 : 5}
                   </div>
