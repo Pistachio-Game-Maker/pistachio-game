@@ -507,8 +507,8 @@
           const newTools = [...(myPlayer.tools || []), card.type];
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
-            [`players/${playerId}/tools`]: newTools,
-            discardPile: newDiscard
+            [`players/${playerId}/tools`]: newTools
+            // Note: Tools do NOT go to discard - they stay in play
           });
           return;
         }
