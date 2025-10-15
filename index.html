@@ -658,9 +658,9 @@
 
       // Game Screen
       if (screen === 'game' && gameState) {
-        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
-        const currentPlayer = players[gameState.currentPlayerIndex];
-        const myPlayer = gameState.players[playerId];
+        const players = gameState.players ? Object.values(gameState.players).filter(p => p.connected && !p.eliminated) : [];
+        const currentPlayer = players.length > 0 ? players[gameState.currentPlayerIndex] : null;
+        const myPlayer = gameState.players ? gameState.players[playerId] : null;
         const isMyTurn = currentPlayer?.id === playerId;
 
         if (gameState.status === 'finished') {
