@@ -29,7 +29,6 @@
       appId: "1:1065517356603:web:22f17f20546ce44e7fae1e"
     };
 
-    // Initialize Firebase
     if (!firebase.apps.length) {
       firebase.initializeApp(firebaseConfig);
     }
@@ -120,7 +119,7 @@
         if (!playerId) {
           setPlayerId(`player-${Date.now()}-${Math.random().toString(36).substring(7)}`);
         }
-      }, []);
+      }, [playerId]);
 
       useEffect(() => {
         if (!roomCode) return;
@@ -137,7 +136,7 @@
         });
 
         return () => gameRef.off('value', listener);
-      }, [roomCode]);
+      }, [roomCode, screen]);
 
       const createGame = async () => {
         if (!playerName.trim()) {
@@ -292,10 +291,8 @@
         const myPlayer = gameState.players[playerId];
         
         if (eatFood) {
-          // Player chooses to eat - hunger marker stays active
           setError('');
         } else {
-          // Player goes hungry - pay 1 energy token and remove marker
           if (myPlayer.energyTokens <= 0) {
             setError('No energy tokens left to pay!');
             return;
@@ -323,7 +320,6 @@
         
         if (currentPlayer.id !== playerId) return;
         
-        // Check for Hunger Event BEFORE drawing
         if (gameState.hungerMarker) {
           setError('You must handle the Hunger Event first! Eat food or pay 1 energy token.');
           return;
@@ -510,7 +506,6 @@
         setTimeout(() => setCopied(false), 2000);
       };
 
-      // Menu Screen
       if (screen === 'menu') {
         return (
           <div className="min-h-screen bg-gradient-to-br from-amber-900 via-yellow-800 to-amber-900 flex items-center justify-center p-4">
@@ -577,7 +572,6 @@
         );
       }
 
-      // Lobby Screen
       if (screen === 'lobby' && gameState) {
         const players = Object.values(gameState.players).filter(p => p.connected);
         
@@ -656,7 +650,6 @@
         );
       }
 
-      // Game Screen
       if (screen === 'game' && gameState) {
         const players = gameState.players ? Object.values(gameState.players).filter(p => p.connected && !p.eliminated) : [];
         const currentPlayer = players.length > 0 ? players[gameState.currentPlayerIndex] : null;
@@ -688,10 +681,19 @@
           );
         }
 
+        if (!myPlayer) {
+          return (
+            <div className="min-h-screen bg-gradient-to-br from-green-900 via-emerald-800 to-green-900 p-4 flex items-center justify-center">
+              <div className="text-white text-center">
+                <h1 className="text-4xl font-bold mb-4">Loading...</h1>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div className="min-h-screen bg-gradient-to-br from-green-900 via-emerald-800 to-green-900 p-4">
             <div className="max-w-7xl mx-auto">
-              {/* Header */}
               <div className="bg-amber-50 rounded-2xl shadow-lg p-4 mb-4 border-2 border-amber-900">
                 <div className="flex justify-between items-center">
                   <div>
@@ -718,9 +720,7 @@
                 </div>
               )}
 
-              {/* Game Board */}
               <div className="grid grid-cols-3 gap-4 mb-4">
-                {/* Main Deck */}
                 <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                   <h3 className="font-bold text-amber-900 mb-2">Main Deck</h3>
                   <div className="relative">
@@ -749,7 +749,6 @@
                   </div>
                 </div>
 
-                {/* Discard & Shell Bowl */}
                 <div className="space-y-4">
                   <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                     <h3 className="font-bold text-amber-900 mb-2">Discard</h3>
@@ -790,7 +789,6 @@
                   </div>
                 </div>
 
-                {/* Golden Deck */}
                 <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                   <h3 className="font-bold text-amber-900 mb-2">Golden Shells</h3>
                   <div className="relative">
@@ -815,9 +813,8 @@
                 </div>
               </div>
 
-              {/* Other Players */}
               <div className="grid grid-cols-3 gap-4 mb-4">
-                {players.filter(p => p.id !== playerId).map((player) => (
+                {players && players.filter(p => p.id !== playerId).map((player) => (
                   <div key={player.id} className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                     <div className="flex items-center gap-2 mb-2">
                       <div 
@@ -844,7 +841,6 @@
                 ))}
               </div>
 
-              {/* My Hand */}
               {myPlayer && (
                 <div className="bg-amber-50 rounded-2xl p-6 border-4 border-amber-900">
                   <div className="flex justify-between items-center mb-4">
@@ -885,6 +881,8 @@
                       </div>
                     </div>
                   )}
+
+                  {myPlayer.tools && myPlayer.tools.length > 0 && (
                     <div className="mb-4">
                       <div className="text-sm text-amber-700 mb-2">Tools in Play:</div>
                       <div className="flex gap-2">
@@ -897,7 +895,6 @@
                     </div>
                   )}
 
-                  {/* Overencumbered Warning */}
                   {isMyTurn && myPlayer.hand && (() => {
                     const handLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
                     const overCount = myPlayer.hand.length - handLimit;
@@ -969,7 +966,6 @@
 
                   {isMyTurn && (
                     <div className="mt-4 space-y-3">
-                      {/* Hunger Event Handler */}
                       {gameState.hungerMarker && (
                         <div className="bg-red-50 border-2 border-red-400 rounded-xl p-4">
                           <div className="text-center mb-3">
@@ -1002,7 +998,6 @@
                         </div>
                       )}
 
-                      {/* Normal Turn Actions */}
                       {!gameState.hungerMarker && (
                         <div className="flex gap-2">
                           <button 
