@@ -392,6 +392,58 @@
         const newHand = myPlayer.hand.filter((_, i) => i !== cardIndex);
         const newDiscard = [...(gameState.discardPile || []), card];
 
+        // SPILL THE BOWL
+        if (card.type === 'spillBowl') {
+          const shellBowl = gameState.shellBowl || [];
+          const updates = {};
+          
+          // Return all tokens to their owners
+          shellBowl.forEach(colorIndex => {
+            const player = Object.values(gameState.players).find(p => p.colorIndex === colorIndex);
+            if (player) {
+              const currentTokens = player.energyTokens;
+              updates[`players/${player.id}/energyTokens`] = Math.min(10, currentTokens + 1);
+            }
+          });
+          
+          updates[`players/${playerId}/hand`] = newHand;
+          updates['discardPile'] = newDiscard;
+          updates['shellBowl'] = [];
+          
+          await database.ref(`games/${roomCode}`).update(updates);
+          return;
+        }
+
+        // DONATE
+        if (card.type === 'donate') {
+          // For now, we'll prompt the user to select a player and card
+          // Set a game state flag that we're in "donate mode"
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            pendingAction: {
+              type: 'donate',
+              playerId: playerId,
+              cardsToGive: 1
+            }
+          });
+          return;
+        }
+
+        // FAST
+        if (card.type === 'fast') {
+          // Skip turn - move to next player without gaining hunger
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+            turnPhase: 'draw',
+            hungerMarker: gameState.hungerMarker // Keep hunger marker if it was there
+          });
+          return;
+        }
+
+        // TOOLS
         if (card.category === 'tool') {
           const newTools = [...(myPlayer.tools || []), card.type];
           await database.ref(`games/${roomCode}`).update({
@@ -399,7 +451,11 @@
             [`players/${playerId}/tools`]: newTools,
             discardPile: newDiscard
           });
-        } else if (card.category === 'edible') {
+          return;
+        }
+
+        // EDIBLES
+        if (card.category === 'edible') {
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard,
@@ -444,12 +500,14 @@
             const newTokens = Math.min(10, myPlayer.energyTokens + 1);
             await database.ref(`games/${roomCode}/players/${playerId}/energyTokens`).set(newTokens);
           }
-        } else {
-          await database.ref(`games/${roomCode}`).update({
-            [`players/${playerId}/hand`]: newHand,
-            discardPile: newDiscard
-          });
+          return;
         }
+
+        // OTHER SPECIALS (default behavior for now)
+        await database.ref(`games/${roomCode}`).update({
+          [`players/${playerId}/hand`]: newHand,
+          discardPile: newDiscard
+        });
       };
 
       const useShellBowl = async () => {
@@ -998,7 +1056,7 @@
                         </div>
                       )}
 
-                      {!gameState.hungerMarker && (
+                      {!gameState.hungerMarker && !gameState.pendingAction && (
                         <div className="flex gap-2">
                           <button 
                             onClick={drawCard}
