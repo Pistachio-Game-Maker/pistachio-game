@@ -289,7 +289,8 @@
         const myPlayer = gameState.players[playerId];
         
         if (eatFood) {
-          setError('');
+          // Player wants to eat - set flag so clicking edible will handle it
+          setError('Click an edible card from your hand to eat it!');
         } else {
           if (myPlayer.energyTokens <= 0) {
             setError('No energy tokens left to pay!');
@@ -318,6 +319,14 @@
         
         if (currentPlayer.id !== playerId) return;
         
+        // Check for Golden Pistachio event first
+        if (gameState.goldenPistachioEvent && 
+            gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
+            !gameState.goldenPistachioEvent.responses?.[playerId]) {
+          setError('You must respond to the Golden Pistachio event first!');
+          return;
+        }
+        
         if (gameState.hungerMarker) {
           setError('You must handle the Hunger Event first! Eat food or pay 1 energy token.');
           return;
@@ -337,34 +346,16 @@
         const moldyCards = drawnCards.filter(card => card.type === 'moldy');
         
         if (moldyCards.length > 0) {
-          const edibles = newHand.filter(card => 
-            ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(card.type)
-          );
-          
-          if (edibles.length > 0) {
-            const discardCard = edibles[0];
-            const finalHand = newHand.filter(card => card.id !== discardCard.id && card.type !== 'moldy');
-            const newDiscard = [...(gameState.discardPile || []), ...moldyCards, discardCard];
-            
-            await database.ref(`games/${roomCode}`).update({
-              [`players/${playerId}/hand`]: finalHand,
-              deck: newDeck,
-              discardPile: newDiscard,
-              currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
-              turnPhase: 'draw'
-            });
-          } else {
-            const finalHand = newHand.filter(card => card.type !== 'moldy');
-            const newDiscard = [...(gameState.discardPile || []), ...moldyCards];
-            
-            await database.ref(`games/${roomCode}`).update({
-              [`players/${playerId}/hand`]: finalHand,
-              deck: newDeck,
-              discardPile: newDiscard,
-              currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
-              turnPhase: 'draw'
-            });
-          }
+          // Set pending action for moldy discard
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            deck: newDeck,
+            pendingAction: {
+              type: 'moldy',
+              playerId: playerId,
+              moldyCards: moldyCards
+            }
+          });
         } else {
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
@@ -516,22 +507,32 @@
         if (card.category === 'edible') {
           const updates = {
             [`players/${playerId}/hand`]: newHand,
-            discardPile: newDiscard,
-            hungerMarker: true
+            discardPile: newDiscard
           };
           
+          // Check if responding to moldy pistachio
+          if (gameState.pendingAction?.type === 'moldy' && gameState.pendingAction.playerId === playerId) {
+            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+            updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
+            updates['pendingAction'] = null;
+            // Add moldy cards to discard
+            updates['discardPile'] = [...newDiscard, ...gameState.pendingAction.moldyCards];
+          }
           // Check if responding to Golden Pistachio event
-          if (gameState.goldenPistachioEvent && 
+          else if (gameState.goldenPistachioEvent && 
               gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
               !gameState.goldenPistachioEvent.responses?.[playerId]) {
             updates[`goldenPistachioEvent/responses/${playerId}`] = 'ate';
             
-            // Check if all players have responded
             const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'ate'};
             const allResponded = gameState.goldenPistachioEvent.playersNeedingResponse.every(pid => responses[pid]);
             if (allResponded) {
               updates['goldenPistachioEvent'] = null;
             }
+          } else if (gameState.hungerMarker) {
+            updates['hungerMarker'] = false;
+          } else {
+            updates['hungerMarker'] = true;
           }
           
           await database.ref(`games/${roomCode}`).update(updates);
@@ -1133,9 +1134,129 @@
                   </>
                   )}
 
+                  {/* Golden Pistachio Event for ALL players (not just current turn) */}
+                  {gameState.goldenPistachioEvent && 
+                   gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
+                   !gameState.goldenPistachioEvent.responses?.[playerId] && (
+                    <div className="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-4 mb-4">
+                      <div className="text-center mb-3">
+                        <h4 className="text-lg font-bold text-yellow-900">✨ GOLDEN PISTACHIO! ✨</h4>
+                        <p className="text-sm text-yellow-700 mt-1">
+                          {gameState.players[gameState.goldenPistachioEvent.playedBy]?.name} played a Golden Pistachio!
+                          <br />You must eat food OR lose 1 energy token.
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={async () => {
+                            const newTokens = Math.max(0, myPlayer.energyTokens - 1);
+                            const updates = {};
+                            updates[`players/${playerId}/energyTokens`] = newTokens;
+                            updates[`goldenPistachioEvent/responses/${playerId}`] = 'paid';
+                            
+                            if (newTokens === 0) {
+                              updates[`players/${playerId}/eliminated`] = true;
+                            }
+                            
+                            const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'paid'};
+                            const allResponded = gameState.goldenPistachioEvent.playersNeedingResponse.every(pid => responses[pid]);
+                            if (allResponded) {
+                              updates['goldenPistachioEvent'] = null;
+                            }
+                            
+                            await database.ref(`games/${roomCode}`).update(updates);
+                          }}
+                          disabled={myPlayer.energyTokens <= 0}
+                          className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                        >
+                          💀 Lose 1 Token
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setError('Click an edible card above to eat it!');
+                          }}
+                          disabled={!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type))}
+                          className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                        >
+                          🍽️ Eat Food
+                        </button>
+                      </div>
+                      <p className="text-xs text-center text-yellow-600 mt-2">
+                        {!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)) 
+                          ? "No edible food in hand - must lose token" 
+                          : "Click edible cards above to eat"}
+                      </p>
+                    </div>
+                  )}
+
                   {isMyTurn && (
                     <div className="mt-4 space-y-3">
-                      {/* Golden Pistachio Event Response */}
+                      {/* Moldy Pistachio Selection */}
+                      {gameState.pendingAction && gameState.pendingAction.type === 'moldy' && gameState.pendingAction.playerId === playerId && (
+                        <div className="bg-green-50 border-2 border-green-600 rounded-xl p-4">
+                          <div className="text-center mb-3">
+                            <h4 className="text-lg font-bold text-green-900">🦠 MOLDY PISTACHIO! 🦠</h4>
+                            <p className="text-sm text-green-700 mt-1">
+                              Discard an edible OR a tool. If you have neither, reveal your hand.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            {myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)) ? (
+                              <p className="text-xs text-center text-green-700">Click an edible card above to discard it</p>
+                            ) : myPlayer.tools && myPlayer.tools.length > 0 ? (
+                              <div>
+                                <p className="text-xs text-center text-green-700 mb-2">No edibles! Click a tool to discard:</p>
+                                <div className="flex gap-2 justify-center">
+                                  {myPlayer.tools.map((tool, idx) => (
+                                    <button
+                                      key={idx}
+                                      onClick={async () => {
+                                        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+                                        const newTools = myPlayer.tools.filter((_, i) => i !== idx);
+                                        const newHand = myPlayer.hand.filter(c => c.type !== 'moldy');
+                                        
+                                        await database.ref(`games/${roomCode}`).update({
+                                          [`players/${playerId}/tools`]: newTools,
+                                          [`players/${playerId}/hand`]: newHand,
+                                          discardPile: [...(gameState.discardPile || []), ...gameState.pendingAction.moldyCards],
+                                          currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+                                          pendingAction: null
+                                        });
+                                      }}
+                                      className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg text-sm"
+                                    >
+                                      Discard {tool}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className="text-sm text-center text-green-700 mb-2 font-bold">No edibles or tools! Revealing hand...</p>
+                                <button
+                                  onClick={async () => {
+                                    const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+                                    const newHand = myPlayer.hand.filter(c => c.type !== 'moldy');
+                                    
+                                    await database.ref(`games/${roomCode}`).update({
+                                      [`players/${playerId}/hand`]: newHand,
+                                      discardPile: [...(gameState.discardPile || []), ...gameState.pendingAction.moldyCards],
+                                      currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+                                      pendingAction: null
+                                    });
+                                    setError('Hand revealed to all players!');
+                                  }}
+                                  className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-lg"
+                                >
+                                  Reveal Hand & Continue
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Golden Pistachio Event Response (during your turn) */}
                       {gameState.goldenPistachioEvent && 
                        gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
                        !gameState.goldenPistachioEvent.responses?.[playerId] && (
@@ -1159,7 +1280,6 @@
                                   updates[`players/${playerId}/eliminated`] = true;
                                 }
                                 
-                                // Check if all players have responded
                                 const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'paid'};
                                 const allResponded = gameState.goldenPistachioEvent.playersNeedingResponse.every(pid => responses[pid]);
                                 if (allResponded) {
