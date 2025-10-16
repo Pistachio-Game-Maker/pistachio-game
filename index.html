@@ -114,6 +114,10 @@
       const [selectedCaffeineIndex, setSelectedCaffeineIndex] = useState(null);
       const [shellBowlMode, setShellBowlMode] = useState(false);
       const [selectedShellIndices, setSelectedShellIndices] = useState([]);
+      const [pickyReorderedCards, setPickyReorderedCards] = useState([]);
+      const [selectedEdibleIndices, setSelectedEdibleIndices] = useState([]);
+      const [multiEatMode, setMultiEatMode] = useState(false);
+      const [showSlapWindow, setShowSlapWindow] = useState(false);
 
       useEffect(() => {
         if (!playerId) {
@@ -132,11 +136,16 @@
             if (data.status === 'playing' && screen !== 'game') {
               setScreen('game');
             }
+            
+            // Initialize picky reordered cards when picky action starts
+            if (data.pendingAction?.type === 'picky' && data.pendingAction.playerId === playerId && pickyReorderedCards.length === 0) {
+              setPickyReorderedCards(data.pendingAction.topCards);
+            }
           }
         });
 
         return () => gameRef.off('value', listener);
-      }, [roomCode, screen]);
+      }, [roomCode, screen, playerId, pickyReorderedCards.length]);
 
       const createGame = async () => {
         if (!playerName.trim()) {
@@ -265,7 +274,9 @@
         if (!gameState) return;
         
         const myPlayer = gameState.players[playerId];
-        const handLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+        const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+        const goldenBonus = myPlayer.goldenShells?.length || 0;
+        const handLimit = baseLimit + goldenBonus;
         const overCount = myPlayer.hand.length - handLimit;
         
         if (overCount <= 0) return;
@@ -276,12 +287,18 @@
         }
         
         const newTokens = myPlayer.energyTokens - overCount;
-        await database.ref(`games/${roomCode}/players/${playerId}/energyTokens`).set(newTokens);
+        
+        const updates = {
+          [`players/${playerId}/energyTokens`]: newTokens
+        };
         
         if (newTokens === 0) {
-          await database.ref(`games/${roomCode}/players/${playerId}/eliminated`).set(true);
+          const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+          updates[`players/${playerId}/eliminated`] = true;
+          updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
         }
         
+        await database.ref(`games/${roomCode}`).update(updates);
         setError('');
       };
 
@@ -291,7 +308,6 @@
         const myPlayer = gameState.players[playerId];
         
         if (eatFood) {
-          // Player wants to eat - set flag so clicking edible will handle it
           setError('Click an edible card from your hand to eat it!');
         } else {
           if (myPlayer.energyTokens <= 0) {
@@ -313,6 +329,56 @@
         }
       };
 
+      const eatMultipleFoods = async () => {
+        if (!gameState || selectedEdibleIndices.length === 0) return;
+        
+        const myPlayer = gameState.players[playerId];
+        const cardsToEat = selectedEdibleIndices.map(idx => myPlayer.hand[idx]);
+        const newHand = myPlayer.hand.filter((_, idx) => !selectedEdibleIndices.includes(idx));
+        const newDiscard = [...(gameState.discardPile || []), ...cardsToEat];
+        
+        const updates = {
+          [`players/${playerId}/hand`]: newHand,
+          discardPile: newDiscard
+        };
+        
+        // If eating 2+ foods, gain 1 energy token
+        if (cardsToEat.length >= 2) {
+          const newTokens = Math.min(10, myPlayer.energyTokens + 1);
+          updates[`players/${playerId}/energyTokens`] = newTokens;
+        }
+        
+        // Check if responding to events
+        if (gameState.pendingAction?.type === 'moldy' && gameState.pendingAction.playerId === playerId) {
+          const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+          updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
+          updates['pendingAction'] = null;
+        }
+        else if (gameState.goldenPistachioEvent && 
+            gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
+            !gameState.goldenPistachioEvent.responses?.[playerId]) {
+          updates[`goldenPistachioEvent/responses/${playerId}`] = 'ate';
+          
+          const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'ate'};
+          const allResponded = gameState.goldenPistachioEvent.playersNeedingResponse.every(pid => responses[pid]);
+          if (allResponded) {
+            updates['goldenPistachioEvent'] = null;
+          }
+        } else if (gameState.hungerMarker) {
+          updates['hungerMarker'] = false;
+        } else {
+          updates['hungerMarker'] = true;
+        }
+        
+        await database.ref(`games/${roomCode}`).update(updates);
+        
+        setMultiEatMode(false);
+        setSelectedEdibleIndices([]);
+        if (cardsToEat.length >= 2) {
+          setError(`Ate ${cardsToEat.length} foods and gained 1 energy token!`);
+        }
+      };
+
       const drawCard = async () => {
         if (!gameState) return;
         
@@ -321,7 +387,17 @@
         
         if (currentPlayer.id !== playerId) return;
         
-        // Check for Golden Pistachio event first
+        const myPlayer = gameState.players[playerId];
+        const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+        const goldenBonus = myPlayer.goldenShells?.length || 0;
+        const handLimit = baseLimit + goldenBonus;
+        const overCount = myPlayer.hand.length - handLimit;
+        
+        if (overCount > 0) {
+          setError('You must pay the overencumbered penalty first!');
+          return;
+        }
+        
         if (gameState.goldenPistachioEvent && 
             gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
             !gameState.goldenPistachioEvent.responses?.[playerId]) {
@@ -339,23 +415,26 @@
           return;
         }
 
-        const myPlayer = gameState.players[playerId];
         const cardsToDraw = myPlayer.tools?.includes('gorilla') ? 2 : 1;
         const newDeck = [...gameState.deck];
         const drawnCards = newDeck.splice(0, Math.min(cardsToDraw, newDeck.length));
-        const newHand = [...(myPlayer.hand || []), ...drawnCards];
-
+        
         const moldyCards = drawnCards.filter(card => card.type === 'moldy');
+        const nonMoldyCards = drawnCards.filter(card => card.type !== 'moldy');
+        
+        const newHand = [...(myPlayer.hand || []), ...nonMoldyCards];
         
         if (moldyCards.length > 0) {
-          // Set pending action for moldy discard
+          const newDiscard = [...(gameState.discardPile || []), ...moldyCards];
+          
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
             deck: newDeck,
+            discardPile: newDiscard,
             pendingAction: {
               type: 'moldy',
               playerId: playerId,
-              moldyCards: moldyCards
+              count: moldyCards.length
             }
           });
         } else {
@@ -377,6 +456,16 @@
         if (currentPlayer.id !== playerId) return;
 
         const myPlayer = gameState.players[playerId];
+        
+        const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+        const goldenBonus = myPlayer.goldenShells?.length || 0;
+        const handLimit = baseLimit + goldenBonus;
+        const overCount = myPlayer.hand.length - handLimit;
+        if (overCount > 0 && !(gameState.pendingAction?.type === 'moldy')) {
+          setError('You must pay the overencumbered penalty first!');
+          return;
+        }
+        
         const card = myPlayer.hand[cardIndex];
         if (!card) return;
 
@@ -501,26 +590,32 @@
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
             [`players/${playerId}/tools`]: newTools
-            // Note: Tools do NOT go to discard - they stay in play
           });
           return;
         }
 
         if (card.category === 'edible') {
+          // Check if in multi-eat mode
+          if (multiEatMode) {
+            // Toggle selection
+            if (selectedEdibleIndices.includes(cardIndex)) {
+              setSelectedEdibleIndices(selectedEdibleIndices.filter(i => i !== cardIndex));
+            } else {
+              setSelectedEdibleIndices([...selectedEdibleIndices, cardIndex]);
+            }
+            return;
+          }
+          
           const updates = {
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard
           };
           
-          // Check if responding to moldy pistachio
           if (gameState.pendingAction?.type === 'moldy' && gameState.pendingAction.playerId === playerId) {
             const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
             updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
             updates['pendingAction'] = null;
-            // Add moldy cards to discard
-            updates['discardPile'] = [...newDiscard, ...gameState.pendingAction.moldyCards];
           }
-          // Check if responding to Golden Pistachio event
           else if (gameState.goldenPistachioEvent && 
               gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
               !gameState.goldenPistachioEvent.responses?.[playerId]) {
@@ -559,8 +654,6 @@
               }
             }
 
-            // All OTHER players must eat or lose energy token
-            // Create a pending action for each player
             const otherPlayers = Object.keys(gameState.players).filter(pid => 
               pid !== playerId && 
               gameState.players[pid].connected && 
@@ -598,8 +691,16 @@
 
         const myPlayer = gameState.players[playerId];
         
+        const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+        const goldenBonus = myPlayer.goldenShells?.length || 0;
+        const handLimit = baseLimit + goldenBonus;
+        const overCount = myPlayer.hand.length - handLimit;
+        if (overCount > 0) {
+          setError('You must pay the overencumbered penalty first!');
+          return;
+        }
+        
         if (!shellBowlMode) {
-          // Entering shell bowl mode
           if (myPlayer.energyTokens <= 0) {
             setError('No energy tokens left!');
             return;
@@ -614,7 +715,6 @@
           setError('Select cards to discard, then click "Confirm Discard"');
           return;
         } else {
-          // Confirming discard
           if (selectedShellIndices.length === 0) {
             setError('Select at least one card to discard!');
             return;
@@ -871,6 +971,27 @@
                 </div>
               )}
 
+              {gameState.revealedHand && (
+                <div className="bg-purple-50 border-2 border-purple-400 rounded-xl p-4 mb-4">
+                  <div className="text-center">
+                    <h4 className="text-lg font-bold text-purple-900">👁️ HAND REVEALED! 👁️</h4>
+                    <p className="text-sm text-purple-700 mb-2">
+                      {gameState.revealedHand.playerName} had no edibles or tools for the Moldy Pistachio!
+                    </p>
+                    <div className="flex gap-2 justify-center flex-wrap">
+                      {gameState.revealedHand.cards.map((card, i) => (
+                        <div key={i} className="bg-white px-3 py-1 rounded border-2 border-purple-300 text-sm font-bold">
+                          {card.type}
+                        </div>
+                      ))}
+                      {gameState.revealedHand.cards.length === 0 && (
+                        <div className="text-sm text-purple-600 italic">Empty hand</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-3 gap-4 mb-4">
                 <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                   <h3 className="font-bold text-amber-900 mb-2">Main Deck</h3>
@@ -1051,7 +1172,9 @@
                   )}
 
                   {isMyTurn && myPlayer.hand && !gameState.pendingAction && !gameState.goldenPistachioEvent && !gameState.hungerMarker && (() => {
-                    const handLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+                    const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+                    const goldenBonus = myPlayer.goldenShells?.length || 0;
+                    const handLimit = baseLimit + goldenBonus;
                     const overCount = myPlayer.hand.length - handLimit;
                     return overCount > 0 && (
                       <div className="bg-orange-50 border-2 border-orange-400 rounded-xl p-4 mb-4">
@@ -1059,30 +1182,232 @@
                           <h4 className="text-lg font-bold text-orange-900">⚠️ OVERENCUMBERED! ⚠️</h4>
                           <p className="text-sm text-orange-700 mt-1">
                             You have {myPlayer.hand.length} cards (limit: {handLimit})
+                            {goldenBonus > 0 && <span className="block text-xs">(Base: {baseLimit} + {goldenBonus} Golden Shell{goldenBonus > 1 ? 's' : ''})</span>}
                           </p>
                           <p className="text-sm text-orange-700 mb-3">
-                            You must pay {overCount} energy token{overCount > 1 ? 's' : ''} to continue your turn
+                            You MUST pay {overCount} energy token{overCount > 1 ? 's' : ''} to continue your turn
                           </p>
                           {myPlayer.energyTokens >= overCount ? (
                             <button 
                               onClick={handleOverencumbered}
                               className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-6 rounded-xl transition-colors"
                             >
-                              💰 Pay {overCount} Token{overCount > 1 ? 's' : ''}
+                              💰 Pay {overCount} Token{overCount > 1 ? 's' : ''} (Required)
                             </button>
                           ) : (
                             <div>
-                              <p className="text-xs text-red-600 mb-2 font-bold">Not enough energy tokens - you will be eliminated!</p>
+                              <p className="text-sm text-green-700 mt-1">
+                              You drew {gameState.pendingAction.count} moldy pistachio{gameState.pendingAction.count > 1 ? 's' : ''}!
+                              <br />Discard an edible OR a tool. If you have neither, reveal your hand.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            {myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)) ? (
+                              <p className="text-xs text-center text-green-700">Click an edible card above to discard it</p>
+                            ) : myPlayer.tools && myPlayer.tools.length > 0 ? (
+                              <div>
+                                <p className="text-xs text-center text-green-700 mb-2">No edibles! Click a tool to discard:</p>
+                                <div className="flex gap-2 justify-center">
+                                  {myPlayer.tools.map((tool, idx) => (
+                                    <button
+                                      key={idx}
+                                      onClick={async () => {
+                                        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+                                        const newTools = myPlayer.tools.filter((_, i) => i !== idx);
+                                        
+                                        await database.ref(`games/${roomCode}`).update({
+                                          [`players/${playerId}/tools`]: newTools,
+                                          currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+                                          pendingAction: null
+                                        });
+                                      }}
+                                      className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg text-sm"
+                                    >
+                                      Discard {tool}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className="text-sm text-center text-green-700 mb-2 font-bold">No edibles or tools! Your hand will be revealed to other players.</p>
+                                <div className="bg-white rounded-lg p-3 mb-3">
+                                  <p className="text-xs text-gray-600 mb-2">Your revealed hand:</p>
+                                  <div className="flex gap-1 justify-center flex-wrap">
+                                    {myPlayer.hand?.map((card, i) => (
+                                      <div key={i} className="text-xs bg-gray-100 px-2 py-1 rounded border border-gray-300">
+                                        {card.type}
+                                      </div>
+                                    ))}
+                                    {(!myPlayer.hand || myPlayer.hand.length === 0) && (
+                                      <div className="text-xs text-gray-500 italic">Empty hand</div>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+                                    
+                                    await database.ref(`games/${roomCode}`).update({
+                                      revealedHand: {
+                                        playerId: playerId,
+                                        playerName: myPlayer.name,
+                                        cards: myPlayer.hand || [],
+                                        timestamp: Date.now()
+                                      },
+                                      currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+                                      pendingAction: null
+                                    });
+                                    
+                                    setTimeout(async () => {
+                                      await database.ref(`games/${roomCode}/revealedHand`).remove();
+                                    }, 5000);
+                                  }}
+                                  className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-lg"
+                                >
+                                  Reveal Hand & Continue
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {gameState.hungerMarker && !gameState.goldenPistachioEvent && (
+                        <div className="bg-red-50 border-2 border-red-400 rounded-xl p-4">
+                          <div className="text-center mb-3">
+                            <h4 className="text-lg font-bold text-red-900">🔥 HUNGER EVENT! 🔥</h4>
+                            <p className="text-sm text-red-700 mt-1">
+                              The previous player ate food. You must eat or pay 1 energy token.
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => handleHungerEvent(false)}
+                              disabled={myPlayer.energyTokens <= 0}
+                              className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                            >
+                              💀 Go Hungry (Pay 1 Token)
+                            </button>
+                            <button 
+                              onClick={() => handleHungerEvent(true)}
+                              disabled={!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type))}
+                              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                            >
+                              🍽️ Eat Food
+                            </button>
+                          </div>
+                          <p className="text-xs text-center text-red-600 mt-2">
+                            {!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)) 
+                              ? "No edible food in hand" 
+                              : "Click food cards above to eat them"}
+                          </p>
+                        </div>
+                      )}
+
+                      {!gameState.hungerMarker && !gameState.goldenPistachioEvent && (() => {
+                        const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+                        const goldenBonus = myPlayer.goldenShells?.length || 0;
+                        const handLimit = baseLimit + goldenBonus;
+                        const isOverencumbered = myPlayer.hand.length > handLimit;
+                        const hasMultipleEdibles = myPlayer.hand?.filter(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)).length >= 2;
+                        
+                        return (
+                          <div className="space-y-2">
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={drawCard}
+                                disabled={isOverencumbered}
+                                className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                              >
+                                🎴 Draw Card (End Turn)
+                              </button>
+                              {shellBowlMode ? (
+                                <button 
+                                  onClick={useShellBowl}
+                                  className="px-6 bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl transition-colors"
+                                >
+                                  ✓ Confirm Discard
+                                </button>
+                              ) : (
+                                <button 
+                                  onClick={useShellBowl}
+                                  disabled={(gameState.shellBowl?.length || 0) >= 5 || isOverencumbered}
+                                  className="px-6 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                                >
+                                  🥜 Shell Bowl
+                                </button>
+                              )}
+                            </div>
+                            {hasMultipleEdibles && !multiEatMode && !shellBowlMode && (
+                              <button
+                                onClick={() => {
+                                  setMultiEatMode(true);
+                                  setSelectedEdibleIndices([]);
+                                }}
+                                disabled={isOverencumbered}
+                                className="w-full bg-green-700 hover:bg-green-800 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-2 rounded-xl transition-colors text-sm"
+                              >
+                                🍽️ Eat Multiple Foods (+1 Energy)
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()} transition-colors"
+                            >
+                              🎴 Draw Card (End Turn)
+                            </button>
+                            {shellBowlMode ? (
+                              <button 
+                                onClick={useShellBowl}
+                                className="px-6 bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl transition-colors"
+                              >
+                                ✓ Confirm Discard
+                              </button>
+                            ) : (
+                              <button 
+                                onClick={useShellBowl}
+                                disabled={(gameState.shellBowl?.length || 0) >= 5 || isOverencumbered}
+                                className="px-6 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                              >
+                                🥜 Shell Bowl
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="text-center text-white text-sm mt-4">
+                Groups 1-3 Fixes: Overencumbered, Moldy, Raccoon, Donate, Picky, Multi-Eat, Golden Shells Hand Limit, Fast+Caffeine
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return null;
+    }
+
+    ReactDOM.render(<PistachioGame />, document.getElementById('root'));
+  </script>
+</body>
+</html>-xs text-red-600 mb-2 font-bold">Not enough energy tokens - you will be eliminated!</p>
                               <button 
                                 onClick={async () => {
-                                  await database.ref(`games/${roomCode}/players/${playerId}`).update({
-                                    energyTokens: 0,
-                                    eliminated: true
+                                  const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+                                  await database.ref(`games/${roomCode}`).update({
+                                    [`players/${playerId}/energyTokens`]: 0,
+                                    [`players/${playerId}/eliminated`]: true,
+                                    currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length
                                   });
                                 }}
                                 className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-xl transition-colors"
                               >
-                                💀 Eliminate Me
+                                💀 Cannot Pay - Eliminate Me
                               </button>
                             </div>
                           )}
@@ -1092,7 +1417,11 @@
                   })()}
 
                   <div className="text-sm text-amber-700 mb-2">
-                    Your Hand ({myPlayer.hand?.length || 0} cards) - Limit: {myPlayer.tools?.includes('gorilla') ? 7 : 5}
+                    Your Hand ({myPlayer.hand?.length || 0} cards) - Limit: {(() => {
+                      const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+                      const goldenBonus = myPlayer.goldenShells?.length || 0;
+                      return baseLimit + goldenBonus;
+                    })()}
                   </div>
                   
                   {(!myPlayer.hand || myPlayer.hand.length === 0) ? (
@@ -1119,6 +1448,35 @@
                         </div>
                       )}
                       
+                      {multiEatMode && (
+                        <div className="mb-3 p-3 bg-green-100 border-2 border-green-500 rounded-lg text-center">
+                          <p className="text-sm font-bold text-green-900">
+                            🍽️ MULTI-EAT MODE: Select 2+ edible cards to eat ({selectedEdibleIndices.length} selected)
+                          </p>
+                          <p className="text-xs text-green-700 mb-2">Eating 2+ foods gains you 1 energy token!</p>
+                          <div className="flex gap-2 justify-center">
+                            {selectedEdibleIndices.length >= 2 && (
+                              <button
+                                onClick={eatMultipleFoods}
+                                className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded font-bold"
+                              >
+                                ✓ Eat {selectedEdibleIndices.length} Foods (+1 Energy)
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setMultiEatMode(false);
+                                setSelectedEdibleIndices([]);
+                                setError('');
+                              }}
+                              className="text-xs bg-gray-400 hover:bg-gray-500 text-white px-3 py-1 rounded"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      
                       {selectedCaffeineIndex !== null && (
                         <div className="mb-3 p-3 bg-yellow-100 border-2 border-yellow-500 rounded-lg text-center">
                           <p className="text-sm font-bold text-yellow-900">
@@ -1137,64 +1495,83 @@
                       )}
                       
                       <div className="flex gap-2 flex-wrap">
-                      {myPlayer.hand.map((card, idx) => (
-                        <button
-                          key={card.id}
-                          onClick={async () => {
-                            if (shellBowlMode) {
-                              // Toggle selection for shell bowl
-                              if (selectedShellIndices.includes(idx)) {
-                                setSelectedShellIndices(selectedShellIndices.filter(i => i !== idx));
+                      {myPlayer.hand.map((card, idx) => {
+                        const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+                        const goldenBonus = myPlayer.goldenShells?.length || 0;
+                        const handLimit = baseLimit + goldenBonus;
+                        const isOverencumbered = myPlayer.hand.length > handLimit;
+                        const canPlayCard = !isOverencumbered || gameState.pendingAction?.type === 'moldy';
+                        
+                        return (
+                          <button
+                            key={card.id}
+                            onClick={async () => {
+                              if (multiEatMode) {
+                                // Toggle selection for multi-eat
+                                if (selectedEdibleIndices.includes(idx)) {
+                                  setSelectedEdibleIndices(selectedEdibleIndices.filter(i => i !== idx));
+                                } else if (['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(card.type)) {
+                                  setSelectedEdibleIndices([...selectedEdibleIndices, idx]);
+                                } else {
+                                  setError('Can only select edible cards to eat!');
+                                }
+                              } else if (shellBowlMode) {
+                                if (selectedShellIndices.includes(idx)) {
+                                  setSelectedShellIndices(selectedShellIndices.filter(i => i !== idx));
+                                } else {
+                                  setSelectedShellIndices([...selectedShellIndices, idx]);
+                                }
+                              } else if (gameState.pendingAction?.type === 'donate' && gameState.pendingAction.playerId === playerId) {
+                                await database.ref(`games/${roomCode}/pendingAction/selectedCardIndex`).set(idx);
+                              } else if (!canPlayCard) {
+                                setError('You must pay the overencumbered penalty first!');
                               } else {
-                                setSelectedShellIndices([...selectedShellIndices, idx]);
+                                playCard(idx);
                               }
-                            } else if (gameState.pendingAction?.type === 'donate' && gameState.pendingAction.playerId === playerId) {
-                              await database.ref(`games/${roomCode}/pendingAction/selectedCardIndex`).set(idx);
-                            } else {
-                              playCard(idx);
-                            }
-                          }}
-                          className={`w-24 h-32 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed relative ${
-                            shellBowlMode && selectedShellIndices.includes(idx)
-                              ? 'border-amber-500 border-4 ring-2 ring-amber-400'
-                              : gameState.pendingAction?.selectedCardIndex === idx 
-                              ? 'border-blue-500 border-4 ring-2 ring-blue-400' 
-                              : selectedCaffeineIndex === idx
-                              ? 'border-yellow-500 border-4 ring-2 ring-yellow-400'
-                              : 'border-yellow-700'
-                          }`}
-                          disabled={!isMyTurn}
-                        >
-                          <img 
-                            src={CARD_IMAGES[card.type] || 'images/cards/cardBack.PNG'}
-                            alt={card.type}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              e.target.style.display = 'none';
-                              e.target.nextSibling.style.display = 'flex';
                             }}
-                          />
-                          <div 
-                            className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center"
-                            style={{display: 'none'}}
+                            className={`w-24 h-32 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed relative ${
+                              multiEatMode && selectedEdibleIndices.includes(idx)
+                                ? 'border-green-500 border-4 ring-2 ring-green-400'
+                                : shellBowlMode && selectedShellIndices.includes(idx)
+                                ? 'border-amber-500 border-4 ring-2 ring-amber-400'
+                                : gameState.pendingAction?.selectedCardIndex === idx 
+                                ? 'border-blue-500 border-4 ring-2 ring-blue-400' 
+                                : selectedCaffeineIndex === idx
+                                ? 'border-yellow-500 border-4 ring-2 ring-yellow-400'
+                                : 'border-yellow-700'
+                            }`}
+                            disabled={!isMyTurn}
                           >
-                            <div className="text-center px-1">
-                              <div className="font-black text-xs text-yellow-900 break-words">
-                                {card.type.toUpperCase()}
+                            <img 
+                              src={CARD_IMAGES[card.type] || 'images/cards/cardBack.PNG'}
+                              alt={card.type}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                e.target.style.display = 'none';
+                                e.target.nextSibling.style.display = 'flex';
+                              }}
+                            />
+                            <div 
+                              className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center"
+                              style={{display: 'none'}}
+                            >
+                              <div className="text-center px-1">
+                                <div className="font-black text-xs text-yellow-900 break-words">
+                                  {card.type.toUpperCase()}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </button>
-                      ))}
+                          </button>
+                        );
+                      })}
                     </div>
                   </>
                   )}
 
-                  {/* Golden Pistachio Event for ALL players (not just current turn) */}
                   {gameState.goldenPistachioEvent && 
                    gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
                    !gameState.goldenPistachioEvent.responses?.[playerId] && (
-                    <div className="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-4 mb-4">
+                    <div className="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-4 mb-4 mt-4">
                       <div className="text-center mb-3">
                         <h4 className="text-lg font-bold text-yellow-900">✨ GOLDEN PISTACHIO! ✨</h4>
                         <p className="text-sm text-yellow-700 mt-1">
@@ -1247,202 +1624,202 @@
 
                   {isMyTurn && (
                     <div className="mt-4 space-y-3">
-                      {/* Moldy Pistachio Selection */}
+                      {/* Raccoon Card - Steal from opponent */}
+                      {gameState.pendingAction && gameState.pendingAction.type === 'raccoon' && gameState.pendingAction.playerId === playerId && (
+                        <div className="bg-gray-50 border-2 border-gray-600 rounded-xl p-4">
+                          <div className="text-center mb-3">
+                            <h4 className="text-lg font-bold text-gray-900">🦝 RACCOON! 🦝</h4>
+                            <p className="text-sm text-gray-700 mt-1">
+                              Select an opponent to steal {gameState.pendingAction.isCaffeinated ? '2 random cards' : '1 random card'} from!
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {Object.values(gameState.players)
+                              .filter(p => p.id !== playerId && p.connected && !p.eliminated && p.hand?.length > 0)
+                              .map((player) => (
+                                <button
+                                  key={player.id}
+                                  onClick={async () => {
+                                    const cardsToSteal = Math.min(
+                                      gameState.pendingAction.isCaffeinated ? 2 : 1,
+                                      player.hand.length
+                                    );
+                                    
+                                    const victimHand = [...player.hand];
+                                    const stolenCards = [];
+                                    
+                                    for (let i = 0; i < cardsToSteal; i++) {
+                                      const randomIndex = Math.floor(Math.random() * victimHand.length);
+                                      stolenCards.push(victimHand.splice(randomIndex, 1)[0]);
+                                    }
+                                    
+                                    const myNewHand = [...myPlayer.hand, ...stolenCards];
+                                    const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+                                    
+                                    await database.ref(`games/${roomCode}`).update({
+                                      [`players/${playerId}/hand`]: myNewHand,
+                                      [`players/${player.id}/hand`]: victimHand,
+                                      pendingAction: null
+                                    });
+                                    
+                                    setError(`Stole ${cardsToSteal} card(s) from ${player.name}!`);
+                                  }}
+                                  className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-4 rounded-lg"
+                                >
+                                  <div className="flex items-center gap-2 justify-center">
+                                    <div 
+                                      className="w-4 h-4 rounded-full" 
+                                      style={{ backgroundColor: PLAYER_COLORS[player.colorIndex] }}
+                                    />
+                                    <span>{player.name}</span>
+                                  </div>
+                                  <div className="text-xs mt-1">{player.hand.length} cards</div>
+                                </button>
+                              ))}
+                          </div>
+                          {Object.values(gameState.players).filter(p => p.id !== playerId && p.connected && !p.eliminated && p.hand?.length > 0).length === 0 && (
+                            <div className="text-center">
+                              <p className="text-sm text-gray-600 mb-3">No opponents with cards to steal from!</p>
+                              <button
+                                onClick={async () => {
+                                  await database.ref(`games/${roomCode}/pendingAction`).set(null);
+                                }}
+                                className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg"
+                              >
+                                Continue
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Donate Card - Give to opponent */}
+                      {gameState.pendingAction && gameState.pendingAction.type === 'donate' && gameState.pendingAction.playerId === playerId && (
+                        <div className="bg-blue-50 border-2 border-blue-600 rounded-xl p-4">
+                          <div className="text-center mb-3">
+                            <h4 className="text-lg font-bold text-blue-900">🎁 DONATE! 🎁</h4>
+                            <p className="text-sm text-blue-700 mt-1">
+                              {gameState.pendingAction.selectedCardIndex === undefined 
+                                ? `Select ${gameState.pendingAction.cardsToGive} card(s) from your hand to donate`
+                                : 'Now select which opponent receives the card(s)'}
+                            </p>
+                          </div>
+                          
+                          {gameState.pendingAction.selectedCardIndex === undefined ? (
+                            <p className="text-xs text-center text-blue-600">Click a card above to select it</p>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-2">
+                              {Object.values(gameState.players)
+                                .filter(p => p.id !== playerId && p.connected && !p.eliminated)
+                                .map((player) => (
+                                  <button
+                                    key={player.id}
+                                    onClick={async () => {
+                                      const cardIndex = gameState.pendingAction.selectedCardIndex;
+                                      const cardToDonate = myPlayer.hand[cardIndex];
+                                      const newMyHand = myPlayer.hand.filter((_, i) => i !== cardIndex);
+                                      const newOpponentHand = [...player.hand, cardToDonate];
+                                      
+                                      await database.ref(`games/${roomCode}`).update({
+                                        [`players/${playerId}/hand`]: newMyHand,
+                                        [`players/${player.id}/hand`]: newOpponentHand,
+                                        pendingAction: null
+                                      });
+                                      
+                                      setError(`Donated ${cardToDonate.type} to ${player.name}!`);
+                                    }}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg"
+                                  >
+                                    <div className="flex items-center gap-2 justify-center">
+                                      <div 
+                                        className="w-4 h-4 rounded-full" 
+                                        style={{ backgroundColor: PLAYER_COLORS[player.colorIndex] }}
+                                      />
+                                      <span>{player.name}</span>
+                                    </div>
+                                  </button>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Picky Card - Reorder top cards */}
+                      {gameState.pendingAction && gameState.pendingAction.type === 'picky' && gameState.pendingAction.playerId === playerId && (
+                        <div className="bg-purple-50 border-2 border-purple-600 rounded-xl p-4">
+                          <div className="text-center mb-3">
+                            <h4 className="text-lg font-bold text-purple-900">🔍 PICKY! 🔍</h4>
+                            <p className="text-sm text-purple-700 mt-1">
+                              Rearrange the top {gameState.pendingAction.topCards.length} cards of the deck
+                            </p>
+                          </div>
+                          
+                          <div>
+                            <div className="space-y-2 mb-4">
+                              {pickyReorderedCards.map((card, idx) => (
+                                <div key={idx} className="flex items-center gap-2 bg-white p-3 rounded-lg border-2 border-purple-300">
+                                  <div className="flex-1">
+                                    <div className="font-bold text-purple-900">
+                                      {idx === 0 ? '🔝 Top' : idx === pickyReorderedCards.length - 1 ? '⬇️ Bottom' : `📄 Position ${idx + 1}`}
+                                    </div>
+                                    <div className="text-sm text-purple-700">{card.type}</div>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    <button
+                                      onClick={() => {
+                                        if (idx > 0) {
+                                          const newOrder = [...pickyReorderedCards];
+                                          [newOrder[idx], newOrder[idx - 1]] = [newOrder[idx - 1], newOrder[idx]];
+                                          setPickyReorderedCards(newOrder);
+                                        }
+                                      }}
+                                      disabled={idx === 0}
+                                      className="bg-purple-500 hover:bg-purple-600 disabled:bg-gray-300 text-white px-3 py-1 rounded disabled:cursor-not-allowed"
+                                    >
+                                      ⬆️
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        if (idx < pickyReorderedCards.length - 1) {
+                                          const newOrder = [...pickyReorderedCards];
+                                          [newOrder[idx], newOrder[idx + 1]] = [newOrder[idx + 1], newOrder[idx]];
+                                          setPickyReorderedCards(newOrder);
+                                        }
+                                      }}
+                                      disabled={idx === pickyReorderedCards.length - 1}
+                                      className="bg-purple-500 hover:bg-purple-600 disabled:bg-gray-300 text-white px-3 py-1 rounded disabled:cursor-not-allowed"
+                                    >
+                                      ⬇️
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            
+                            <button
+                              onClick={async () => {
+                                const newDeck = [...gameState.deck];
+                                newDeck.splice(0, gameState.pendingAction.topCards.length, ...pickyReorderedCards);
+                                
+                                await database.ref(`games/${roomCode}`).update({
+                                  deck: newDeck,
+                                  pendingAction: null
+                                });
+                                
+                                setPickyReorderedCards([]);
+                                setError('Cards reordered on top of deck!');
+                              }}
+                              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded-xl transition-colors"
+                            >
+                              ✓ Confirm Order
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Moldy Pistachio */}
                       {gameState.pendingAction && gameState.pendingAction.type === 'moldy' && gameState.pendingAction.playerId === playerId && (
                         <div className="bg-green-50 border-2 border-green-600 rounded-xl p-4">
                           <div className="text-center mb-3">
                             <h4 className="text-lg font-bold text-green-900">🦠 MOLDY PISTACHIO! 🦠</h4>
-                            <p className="text-sm text-green-700 mt-1">
-                              Discard an edible OR a tool. If you have neither, reveal your hand.
-                            </p>
-                          </div>
-                          <div className="space-y-2">
-                            {myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)) ? (
-                              <p className="text-xs text-center text-green-700">Click an edible card above to discard it</p>
-                            ) : myPlayer.tools && myPlayer.tools.length > 0 ? (
-                              <div>
-                                <p className="text-xs text-center text-green-700 mb-2">No edibles! Click a tool to discard:</p>
-                                <div className="flex gap-2 justify-center">
-                                  {myPlayer.tools.map((tool, idx) => (
-                                    <button
-                                      key={idx}
-                                      onClick={async () => {
-                                        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
-                                        const newTools = myPlayer.tools.filter((_, i) => i !== idx);
-                                        const newHand = myPlayer.hand.filter(c => c.type !== 'moldy');
-                                        
-                                        await database.ref(`games/${roomCode}`).update({
-                                          [`players/${playerId}/tools`]: newTools,
-                                          [`players/${playerId}/hand`]: newHand,
-                                          discardPile: [...(gameState.discardPile || []), ...gameState.pendingAction.moldyCards],
-                                          currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
-                                          pendingAction: null
-                                        });
-                                      }}
-                                      className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg text-sm"
-                                    >
-                                      Discard {tool}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            ) : (
-                              <div>
-                                <p className="text-sm text-center text-green-700 mb-2 font-bold">No edibles or tools! Revealing hand...</p>
-                                <button
-                                  onClick={async () => {
-                                    const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
-                                    const newHand = myPlayer.hand.filter(c => c.type !== 'moldy');
-                                    
-                                    await database.ref(`games/${roomCode}`).update({
-                                      [`players/${playerId}/hand`]: newHand,
-                                      discardPile: [...(gameState.discardPile || []), ...gameState.pendingAction.moldyCards],
-                                      currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
-                                      pendingAction: null
-                                    });
-                                    setError('Hand revealed to all players!');
-                                  }}
-                                  className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-lg"
-                                >
-                                  Reveal Hand & Continue
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Golden Pistachio Event Response (during your turn) */}
-                      {gameState.goldenPistachioEvent && 
-                       gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
-                       !gameState.goldenPistachioEvent.responses?.[playerId] && (
-                        <div className="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-4">
-                          <div className="text-center mb-3">
-                            <h4 className="text-lg font-bold text-yellow-900">✨ GOLDEN PISTACHIO! ✨</h4>
-                            <p className="text-sm text-yellow-700 mt-1">
-                              {gameState.players[gameState.goldenPistachioEvent.playedBy]?.name} played a Golden Pistachio!
-                              <br />You must eat food OR lose 1 energy token.
-                            </p>
-                          </div>
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={async () => {
-                                const newTokens = Math.max(0, myPlayer.energyTokens - 1);
-                                const updates = {};
-                                updates[`players/${playerId}/energyTokens`] = newTokens;
-                                updates[`goldenPistachioEvent/responses/${playerId}`] = 'paid';
-                                
-                                if (newTokens === 0) {
-                                  updates[`players/${playerId}/eliminated`] = true;
-                                }
-                                
-                                const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'paid'};
-                                const allResponded = gameState.goldenPistachioEvent.playersNeedingResponse.every(pid => responses[pid]);
-                                if (allResponded) {
-                                  updates['goldenPistachioEvent'] = null;
-                                }
-                                
-                                await database.ref(`games/${roomCode}`).update(updates);
-                              }}
-                              disabled={myPlayer.energyTokens <= 0}
-                              className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                              💀 Lose 1 Token
-                            </button>
-                            <button 
-                              onClick={() => {
-                                setError('Click an edible card above to eat it!');
-                              }}
-                              disabled={!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type))}
-                              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                              🍽️ Eat Food
-                            </button>
-                          </div>
-                          <p className="text-xs text-center text-yellow-600 mt-2">
-                            {!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)) 
-                              ? "No edible food in hand" 
-                              : ""}
-                          </p>
-                        </div>
-                      )}
-
-                      {gameState.hungerMarker && !gameState.goldenPistachioEvent && (
-                        <div className="bg-red-50 border-2 border-red-400 rounded-xl p-4">
-                          <div className="text-center mb-3">
-                            <h4 className="text-lg font-bold text-red-900">🔥 HUNGER EVENT! 🔥</h4>
-                            <p className="text-sm text-red-700 mt-1">
-                              The previous player ate food. You must eat or pay 1 energy token.
-                            </p>
-                          </div>
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => handleHungerEvent(false)}
-                              disabled={myPlayer.energyTokens <= 0}
-                              className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                              💀 Go Hungry (Pay 1 Token)
-                            </button>
-                            <button 
-                              onClick={() => handleHungerEvent(true)}
-                              disabled={!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type))}
-                              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                              🍽️ Eat Food
-                            </button>
-                          </div>
-                          <p className="text-xs text-center text-red-600 mt-2">
-                            {!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type)) 
-                              ? "No edible food in hand" 
-                              : "Click food cards above to eat them"}
-                          </p>
-                        </div>
-                      )}
-
-                      {!gameState.hungerMarker && !gameState.goldenPistachioEvent && (
-                        <div className="flex gap-2">
-                          <button 
-                            onClick={drawCard}
-                            className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition-colors"
-                          >
-                            🎴 Draw Card (End Turn)
-                          </button>
-                          {shellBowlMode ? (
-                            <button 
-                              onClick={useShellBowl}
-                              className="px-6 bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                              ✓ Confirm Discard
-                            </button>
-                          ) : (
-                            <button 
-                              onClick={useShellBowl}
-                              disabled={(gameState.shellBowl?.length || 0) >= 5}
-                              className="px-6 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                              🥜 Shell Bowl
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="text-center text-white text-sm mt-4">
-                Full features loading...
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      return null;
-    }
-
-    ReactDOM.render(<PistachioGame />, document.getElementById('root'));
-  </script>
-</body>
-</html>
-                
+                            <p className="text
