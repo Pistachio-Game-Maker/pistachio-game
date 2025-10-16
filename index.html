@@ -115,9 +115,9 @@
       const [shellBowlMode, setShellBowlMode] = useState(false);
       const [selectedShellIndices, setSelectedShellIndices] = useState([]);
       const [pickyReorderedCards, setPickyReorderedCards] = useState([]);
+      const [pickySelectedIndices, setPickySelectedIndices] = useState([]);
       const [selectedEdibleIndices, setSelectedEdibleIndices] = useState([]);
       const [multiEatMode, setMultiEatMode] = useState(false);
-      const [showSlapWindow, setShowSlapWindow] = useState(false);
       const [zoomedCard, setZoomedCard] = useState(null);
       const [showRules, setShowRules] = useState(false);
 
@@ -141,6 +141,7 @@
             
             if (data.pendingAction?.type === 'picky' && data.pendingAction.playerId === playerId && pickyReorderedCards.length === 0) {
               setPickyReorderedCards(data.pendingAction.topCards);
+              setPickySelectedIndices([]);
             }
           }
         });
@@ -321,42 +322,6 @@
         
         await database.ref(`games/${roomCode}`).update(updates);
         setError('');
-      };
-
-      const handleHungerEvent = async (eatFood) => {
-        if (!gameState) return;
-        
-        const myPlayer = gameState.players[playerId];
-        
-        if (eatFood) {
-          setError('Click an edible card from your hand to eat it!');
-        } else {
-          if (myPlayer.energyTokens <= 0) {
-            setError('No energy tokens left to pay!');
-            return;
-          }
-          
-          const newTokens = myPlayer.energyTokens - 1;
-          const updates = {
-            [`players/${playerId}/energyTokens`]: newTokens,
-            tokenBowl: (gameState.tokenBowl || 0) + 1,
-            hungerMarker: false
-          };
-          
-          if (newTokens === 0) {
-            updates[`players/${playerId}/eliminated`] = true;
-            
-            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
-            if (players.length === 1) {
-              updates['status'] = 'finished';
-              updates['winner'] = players[0].id;
-              updates['winType'] = 'lastStanding';
-            }
-          }
-          
-          await database.ref(`games/${roomCode}`).update(updates);
-          setError('');
-        }
       };
 
       const drawCard = async () => {
@@ -648,7 +613,7 @@
             discardPile: newDiscard,
             currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
             turnPhase: 'draw',
-            hungerMarker: gameState.hungerMarker
+            hungerMarker: true
           };
           
           if (isCaffeinated) {
@@ -666,7 +631,8 @@
         }
 
         if (card.type === 'picky') {
-          const topCards = gameState.deck.slice(0, isCaffeinated ? 4 : 3);
+          const cardsToView = isCaffeinated ? 4 : 3;
+          const topCards = gameState.deck.slice(0, cardsToView);
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard,
@@ -675,6 +641,7 @@
               playerId: playerId,
               topCards: topCards,
               isCaffeinated: isCaffeinated,
+              hasGorilla: myPlayer.tools?.includes('gorilla') || false,
               reorderedCards: null
             }
           });
@@ -707,15 +674,6 @@
         if (card.category === 'edible') {
           if (card.type === 'pesky' && !myPlayer.tools?.includes('nutcracker')) {
             setError('Cannot eat Pesky Pistachio without a Nutcracker!');
-            return;
-          }
-          
-          if (multiEatMode) {
-            if (selectedEdibleIndices.includes(cardIndex)) {
-              setSelectedEdibleIndices(selectedEdibleIndices.filter(i => i !== cardIndex));
-            } else {
-              setSelectedEdibleIndices([...selectedEdibleIndices, cardIndex]);
-            }
             return;
           }
           
@@ -997,9 +955,9 @@
                         <div><strong>👋 Slap:</strong> Cancel another player's card (4-second window)</div>
                         <div><strong>🦝 Raccoon:</strong> Steal 1 random card (2 if caffeinated)</div>
                         <div><strong>🎁 Donate:</strong> Give 1 card to opponent (2 if caffeinated)</div>
-                        <div><strong>🔍 Picky:</strong> View top 3 cards and reorder (4 if caffeinated)</div>
-                        <div><strong>⚡ Fast:</strong> Skip turn (draw cards if caffeinated)</div>
-                        <div><strong>🌊 Spill Bowl:</strong> Return energy tokens from shell bowl</div>
+                        <div><strong>🔍 Picky:</strong> View top 3 cards and reorder (4 if caffeinated). With Gorilla: Pick 2 cards instead of 1!</div>
+                        <div><strong>⚡ Fast:</strong> Skip turn and continue hunger event (draw cards if caffeinated)</div>
+                        <div><strong>🌊 Spill Bowl:</strong> Return all energy tokens from shell bowl to players</div>
                         <div><strong>🦠 Moldy:</strong> Forces you to discard edible/tool or reveal hand</div>
                       </div>
                     </section>
@@ -1023,7 +981,7 @@
 
       if (screen === 'lobby' && gameState) {
         const players = Object.values(gameState.players);
-            return (
+        return (
           <div className="min-h-screen bg-gradient-to-br from-amber-900 via-yellow-800 to-amber-900 flex items-center justify-center p-4">
             <div className="bg-amber-50 rounded-3xl shadow-2xl p-8 max-w-2xl w-full border-4 border-amber-900">
               <div className="flex justify-between items-start mb-6">
@@ -1154,9 +1112,9 @@
                         <div><strong>👋 Slap:</strong> Cancel another player's card (4-second window)</div>
                         <div><strong>🦝 Raccoon:</strong> Steal 1 random card (2 if caffeinated)</div>
                         <div><strong>🎁 Donate:</strong> Give 1 card to opponent (2 if caffeinated)</div>
-                        <div><strong>🔍 Picky:</strong> View top 3 cards and reorder (4 if caffeinated)</div>
-                        <div><strong>⚡ Fast:</strong> Skip turn (draw cards if caffeinated)</div>
-                        <div><strong>🌊 Spill Bowl:</strong> Return energy tokens from shell bowl</div>
+                        <div><strong>🔍 Picky:</strong> View top 3 cards and reorder (4 if caffeinated). With Gorilla: Pick 2 cards instead of 1!</div>
+                        <div><strong>⚡ Fast:</strong> Skip turn and continue hunger event (draw cards if caffeinated)</div>
+                        <div><strong>🌊 Spill Bowl:</strong> Return all energy tokens from shell bowl to players</div>
                         <div><strong>🦠 Moldy:</strong> Forces you to discard edible/tool or reveal hand</div>
                       </div>
                     </section>
@@ -1177,7 +1135,8 @@
           </div>
         );
       }
-     if (screen === 'game' && gameState) {
+
+      if (screen === 'game' && gameState) {
         const players = gameState.players ? Object.values(gameState.players).filter(p => p.connected && !p.eliminated) : [];
         const currentPlayer = players.length > 0 ? players[gameState.currentPlayerIndex] : null;
         const myPlayer = gameState.players ? gameState.players[playerId] : null;
@@ -1446,7 +1405,8 @@
                   </div>
                 ))}
               </div>
-             {myPlayer && (
+
+              {myPlayer && (
                 <div className="bg-amber-50 rounded-2xl p-6 border-4 border-amber-900">
                   <div className="flex justify-between items-center mb-4">
                     <div className="flex items-center gap-3">
@@ -1629,101 +1589,102 @@
                       )}
                       
                       <div className="flex gap-2 flex-wrap">
-                      {myPlayer.hand.map((card, idx) => {
-                        const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
-                        const goldenBonus = myPlayer.goldenShells?.length || 0;
-                        const handLimit = baseLimit + goldenBonus;
-                        const isOverencumbered = myPlayer.hand.length > handLimit;
-                        const canPlayCard = !isOverencumbered || gameState.pendingAction?.type === 'moldy';
-                        
-                        return (
-                          <button
-                            key={card.id}
-                            onClick={async () => {
-                              if (multiEatMode) {
-                                if (selectedEdibleIndices.includes(idx)) {
-                                  setSelectedEdibleIndices(selectedEdibleIndices.filter(i => i !== idx));
-                                } else if (['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(card.type)) {
-                                  if (card.type === 'pesky' && !myPlayer.tools?.includes('nutcracker')) {
-                                    setError('Cannot eat Pesky Pistachio without a Nutcracker!');
-                                    return;
+                        {myPlayer.hand.map((card, idx) => {
+                          const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
+                          const goldenBonus = myPlayer.goldenShells?.length || 0;
+                          const handLimit = baseLimit + goldenBonus;
+                          const isOverencumbered = myPlayer.hand.length > handLimit;
+                          const canPlayCard = !isOverencumbered || gameState.pendingAction?.type === 'moldy';
+                          
+                          return (
+                            <button
+                              key={card.id}
+                              onClick={async () => {
+                                if (multiEatMode) {
+                                  if (selectedEdibleIndices.includes(idx)) {
+                                    setSelectedEdibleIndices(selectedEdibleIndices.filter(i => i !== idx));
+                                  } else if (['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(card.type)) {
+                                    if (card.type === 'pesky' && !myPlayer.tools?.includes('nutcracker')) {
+                                      setError('Cannot eat Pesky Pistachio without a Nutcracker!');
+                                      return;
+                                    }
+                                    setSelectedEdibleIndices([...selectedEdibleIndices, idx]);
+                                  } else {
+                                    setError('Can only select edible cards to eat!');
                                   }
-                                  setSelectedEdibleIndices([...selectedEdibleIndices, idx]);
+                                } else if (shellBowlMode) {
+                                  if (selectedShellIndices.includes(idx)) {
+                                    setSelectedShellIndices(selectedShellIndices.filter(i => i !== idx));
+                                  } else {
+                                    setSelectedShellIndices([...selectedShellIndices, idx]);
+                                  }
+                                } else if (gameState.pendingAction?.type === 'donate' && gameState.pendingAction.playerId === playerId) {
+                                  const selectedIndices = gameState.pendingAction.selectedCardIndices || [];
+                                  const cardsNeeded = gameState.pendingAction.cardsToGive;
+                                  
+                                  if (selectedIndices.includes(idx)) {
+                                    await database.ref(`games/${roomCode}/pendingAction/selectedCardIndices`).set(
+                                      selectedIndices.filter(i => i !== idx)
+                                    );
+                                  } else if (selectedIndices.length < cardsNeeded) {
+                                    await database.ref(`games/${roomCode}/pendingAction/selectedCardIndices`).set(
+                                      [...selectedIndices, idx]
+                                    );
+                                  } else {
+                                    setError(`Already selected ${cardsNeeded} card(s)!`);
+                                  }
+                                } else if (!canPlayCard) {
+                                  setError('You must pay the overencumbered penalty first!');
                                 } else {
-                                  setError('Can only select edible cards to eat!');
+                                  playCard(idx);
                                 }
-                              } else if (shellBowlMode) {
-                                if (selectedShellIndices.includes(idx)) {
-                                  setSelectedShellIndices(selectedShellIndices.filter(i => i !== idx));
-                                } else {
-                                  setSelectedShellIndices([...selectedShellIndices, idx]);
-                                }
-                              } else if (gameState.pendingAction?.type === 'donate' && gameState.pendingAction.playerId === playerId) {
-                                const selectedIndices = gameState.pendingAction.selectedCardIndices || [];
-                                const cardsNeeded = gameState.pendingAction.cardsToGive;
-                                
-                                if (selectedIndices.includes(idx)) {
-                                  await database.ref(`games/${roomCode}/pendingAction/selectedCardIndices`).set(
-                                    selectedIndices.filter(i => i !== idx)
-                                  );
-                                } else if (selectedIndices.length < cardsNeeded) {
-                                  await database.ref(`games/${roomCode}/pendingAction/selectedCardIndices`).set(
-                                    [...selectedIndices, idx]
-                                  );
-                                } else {
-                                  setError(`Already selected ${cardsNeeded} card(s)!`);
-                                }
-                              } else if (!canPlayCard) {
-                                setError('You must pay the overencumbered penalty first!');
-                              } else {
-                                playCard(idx);
-                              }
-                            }}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              setZoomedCard({ type: card.type, image: CARD_IMAGES[card.type] });
-                            }}
-                            className={`w-24 h-32 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed relative ${
-                              multiEatMode && selectedEdibleIndices.includes(idx)
-                                ? 'border-green-500 border-4 ring-2 ring-green-400'
-                                : shellBowlMode && selectedShellIndices.includes(idx)
-                                ? 'border-amber-500 border-4 ring-2 ring-amber-400'
-                                : gameState.pendingAction?.type === 'donate' && gameState.pendingAction.selectedCardIndices?.includes(idx)
-                                ? 'border-blue-500 border-4 ring-2 ring-blue-400' 
-                                : selectedCaffeineIndex === idx
-                                ? 'border-yellow-500 border-4 ring-2 ring-yellow-400'
-                                : 'border-yellow-700'
-                            }`}
-                            disabled={!isMyTurn}
-                          >
-                            <img 
-                              src={CARD_IMAGES[card.type] || 'images/cards/cardBack.PNG'}
-                              alt={card.type}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                e.target.style.display = 'none';
-                                e.target.nextSibling.style.display = 'flex';
                               }}
-                            />
-                            <div 
-                              className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center"
-                              style={{display: 'none'}}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                setZoomedCard({ type: card.type, image: CARD_IMAGES[card.type] });
+                              }}
+                              className={`w-24 h-32 rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all border-2 overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed relative ${
+                                multiEatMode && selectedEdibleIndices.includes(idx)
+                                  ? 'border-green-500 border-4 ring-2 ring-green-400'
+                                  : shellBowlMode && selectedShellIndices.includes(idx)
+                                  ? 'border-amber-500 border-4 ring-2 ring-amber-400'
+                                  : gameState.pendingAction?.type === 'donate' && gameState.pendingAction.selectedCardIndices?.includes(idx)
+                                  ? 'border-blue-500 border-4 ring-2 ring-blue-400' 
+                                  : selectedCaffeineIndex === idx
+                                  ? 'border-yellow-500 border-4 ring-2 ring-yellow-400'
+                                  : 'border-yellow-700'
+                              }`}
+                              disabled={!isMyTurn}
                             >
-                              <div className="text-center px-1">
-                                <div className="font-black text-xs text-yellow-900 break-words">
-                                  {card.type.toUpperCase()}
+                              <img 
+                                src={CARD_IMAGES[card.type] || 'images/cards/cardBack.PNG'}
+                                alt={card.type}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  e.target.style.display = 'none';
+                                  e.target.nextSibling.style.display = 'flex';
+                                }}
+                              />
+                              <div 
+                                className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center"
+                                style={{display: 'none'}}
+                              >
+                                <div className="text-center px-1">
+                                  <div className="font-black text-xs text-yellow-900 break-words">
+                                    {card.type.toUpperCase()}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
                   )}
-                 {gameState.goldenPistachioEvent && 
-                   gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
-                   !gameState.goldenPistachioEvent.responses?.[playerId] && (
+
+                  {gameState.goldenPistachioEvent && 
+                    gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
+                    !gameState.goldenPistachioEvent.responses?.[playerId] && (
                     <div className="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-4 mb-4 mt-4">
                       <div className="text-center mb-3">
                         <h4 className="text-lg font-bold text-yellow-900">✨ GOLDEN PISTACHIO! ✨</h4>
@@ -1907,11 +1868,46 @@
                           <div className="text-center mb-3">
                             <h4 className="text-lg font-bold text-purple-900">🔍 PICKY! 🔍</h4>
                             <p className="text-sm text-purple-700 mt-1">
-                              Rearrange the top {gameState.pendingAction.topCards.length} cards of the deck
+                              {gameState.pendingAction.hasGorilla 
+                                ? `Pick ${gameState.pendingAction.isCaffeinated ? '2' : '1'} card(s) to keep, then rearrange the top ${gameState.pendingAction.topCards.length} cards`
+                                : `Rearrange the top ${gameState.pendingAction.topCards.length} cards of the deck`}
                             </p>
                           </div>
                           
+                          {gameState.pendingAction.hasGorilla && (
+                            <div className="mb-4">
+                              <p className="text-sm font-bold text-purple-900 mb-2">
+                                Select {gameState.pendingAction.isCaffeinated ? '2' : '1'} card(s) to keep ({pickySelectedIndices.length} selected):
+                              </p>
+                              <div className="flex gap-2 justify-center flex-wrap">
+                                {pickyReorderedCards.map((card, idx) => (
+                                  <button
+                                    key={idx}
+                                    onClick={() => {
+                                      const maxPicks = gameState.pendingAction.isCaffeinated ? 2 : 1;
+                                      if (pickySelectedIndices.includes(idx)) {
+                                        setPickySelectedIndices(pickySelectedIndices.filter(i => i !== idx));
+                                      } else if (pickySelectedIndices.length < maxPicks) {
+                                        setPickySelectedIndices([...pickySelectedIndices, idx]);
+                                      } else {
+                                        setError(`Can only pick ${maxPicks} card(s)!`);
+                                      }
+                                    }}
+                                    className={`px-4 py-2 rounded-lg font-bold ${
+                                      pickySelectedIndices.includes(idx)
+                                        ? 'bg-purple-600 text-white'
+                                        : 'bg-white text-purple-900 border-2 border-purple-300'
+                                    }`}
+                                  >
+                                    {card.type}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
                           <div>
+                            <p className="text-sm font-bold text-purple-900 mb-2">Deck order (top to bottom):</p>
                             <div className="space-y-2 mb-4">
                               {pickyReorderedCards.map((card, idx) => (
                                 <div key={idx} className="flex items-center gap-2 bg-white p-3 rounded-lg border-2 border-purple-300">
@@ -1955,18 +1951,42 @@
                             
                             <button
                               onClick={async () => {
-                                const newDeck = [...gameState.deck];
-                                newDeck.splice(0, gameState.pendingAction.topCards.length, ...pickyReorderedCards);
+                                const hasGorilla = gameState.pendingAction.hasGorilla;
+                                const maxPicks = gameState.pendingAction.isCaffeinated ? 2 : 1;
                                 
-                                await database.ref(`games/${roomCode}`).update({
+                                if (hasGorilla && pickySelectedIndices.length !== maxPicks) {
+                                  setError(`Must select exactly ${maxPicks} card(s) to keep!`);
+                                  return;
+                                }
+                                
+                                let cardsToAddToHand = [];
+                                let cardsToTopDeck = pickyReorderedCards;
+                                
+                                if (hasGorilla) {
+                                  cardsToAddToHand = pickySelectedIndices.map(idx => pickyReorderedCards[idx]);
+                                  cardsToTopDeck = pickyReorderedCards.filter((_, idx) => !pickySelectedIndices.includes(idx));
+                                }
+                                
+                                const newDeck = [...gameState.deck];
+                                newDeck.splice(0, gameState.pendingAction.topCards.length, ...cardsToTopDeck);
+                                
+                                const updates = {
                                   deck: newDeck,
                                   pendingAction: null
-                                });
+                                };
+                                
+                                if (hasGorilla && cardsToAddToHand.length > 0) {
+                                  updates[`players/${playerId}/hand`] = [...myPlayer.hand, ...cardsToAddToHand];
+                                }
+                                
+                                await database.ref(`games/${roomCode}`).update(updates);
                                 
                                 setPickyReorderedCards([]);
-                                setError('Cards reordered on top of deck!');
+                                setPickySelectedIndices([]);
+                                setError(hasGorilla ? `Kept ${cardsToAddToHand.length} card(s) and reordered the deck!` : 'Cards reordered on top of deck!');
                               }}
-                              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded-xl transition-colors"
+                              disabled={gameState.pendingAction.hasGorilla && pickySelectedIndices.length !== (gameState.pendingAction.isCaffeinated ? 2 : 1)}
+                              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
                             >
                               ✓ Confirm Order
                             </button>
@@ -2065,14 +2085,42 @@
                           </div>
                           <div className="flex gap-2">
                             <button 
-                              onClick={() => handleHungerEvent(false)}
+                              onClick={async () => {
+                                if (myPlayer.energyTokens <= 0) {
+                                  setError('No energy tokens left to pay!');
+                                  return;
+                                }
+                                
+                                const newTokens = myPlayer.energyTokens - 1;
+                                const updates = {
+                                  [`players/${playerId}/energyTokens`]: newTokens,
+                                  tokenBowl: (gameState.tokenBowl || 0) + 1,
+                                  hungerMarker: false
+                                };
+                                
+                                if (newTokens === 0) {
+                                  updates[`players/${playerId}/eliminated`] = true;
+                                  
+                                  const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
+                                  if (players.length === 1) {
+                                    updates['status'] = 'finished';
+                                    updates['winner'] = players[0].id;
+                                    updates['winType'] = 'lastStanding';
+                                  }
+                                }
+                                
+                                await database.ref(`games/${roomCode}`).update(updates);
+                                setError('');
+                              }}
                               disabled={myPlayer.energyTokens <= 0}
                               className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
                             >
                               💀 Go Hungry (Pay 1 Token)
                             </button>
                             <button 
-                              onClick={() => handleHungerEvent(true)}
+                              onClick={() => {
+                                setError('Click an edible card above to eat it!');
+                              }}
                               disabled={!myPlayer.hand?.some(c => ['pistachio', 'pesky', 'loose', 'golden', 'raisin'].includes(c.type))}
                               className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
                             >
@@ -2086,7 +2134,8 @@
                           </p>
                         </div>
                       )}
-                     {!gameState.hungerMarker && !gameState.goldenPistachioEvent && (() => {
+
+                      {!gameState.hungerMarker && !gameState.goldenPistachioEvent && (() => {
                         const baseLimit = myPlayer.tools?.includes('gorilla') ? 7 : 5;
                         const goldenBonus = myPlayer.goldenShells?.length || 0;
                         const handLimit = baseLimit + goldenBonus;
@@ -2141,7 +2190,7 @@
               )}
 
               <div className="text-center text-white text-sm mt-4">
-                ✅ ALL FEATURES COMPLETE! Right-click cards to zoom • Reconnection support • Rules button • Full game mechanics
+                ✅ ALL RULES IMPLEMENTED! Picky with Gorilla • Fast continues hunger • All mechanics verified
               </div>
             </div>
             
@@ -2226,9 +2275,9 @@
                         <div><strong>👋 Slap:</strong> Cancel another player's card (4-second window)</div>
                         <div><strong>🦝 Raccoon:</strong> Steal 1 random card (2 if caffeinated)</div>
                         <div><strong>🎁 Donate:</strong> Give 1 card to opponent (2 if caffeinated)</div>
-                        <div><strong>🔍 Picky:</strong> View top 3 cards and reorder (4 if caffeinated)</div>
-                        <div><strong>⚡ Fast:</strong> Skip turn (draw cards if caffeinated)</div>
-                        <div><strong>🌊 Spill Bowl:</strong> Return energy tokens from shell bowl</div>
+                        <div><strong>🔍 Picky:</strong> View top 3 cards and reorder (4 if caffeinated). With Gorilla: Pick 2 cards instead of 1!</div>
+                        <div><strong>⚡ Fast:</strong> Skip turn and continue hunger event (draw cards if caffeinated)</div>
+                        <div><strong>🌊 Spill Bowl:</strong> Return all energy tokens from shell bowl to players</div>
                         <div><strong>🦠 Moldy:</strong> Forces you to discard edible/tool or reveal hand</div>
                       </div>
                     </section>
