@@ -1,4 +1,210 @@
-<!DOCTYPE html>
+          await database.ref(`games/${roomCode}`).update(updates);
+          setError('');
+        }
+      };
+
+      const executeCardLogic = async (card, isCaffeinated, newHand, newDiscard) => {
+        const myPlayer = gameState.players[playerId];
+        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+        
+        // Execute card effects after slap window closes
+        if (card.type === 'spillBowl') {
+          const shellBowl = gameState.shellBowl || [];
+          const updates = {};
+          
+          if (isCaffeinated) {
+            shellBowl.forEach(colorIndex => {
+              if (colorIndex !== myPlayer.colorIndex) {
+                const player = Object.values(gameState.players).find(p => p.colorIndex === colorIndex);
+                if (player) {
+                  updates[`players/${player.id}/energyTokens`] = Math.min(10, player.energyTokens + 1);
+                }
+              }
+            });
+            updates['shellBowl'] = shellBowl.filter(c => c === myPlayer.colorIndex);
+          } else {
+            shellBowl.forEach(colorIndex => {
+              const player = Object.values(gameState.players).find(p => p.colorIndex === colorIndex);
+              if (player) {
+                updates[`players/${player.id}/energyTokens`] = Math.min(10, player.energyTokens + 1);
+              }
+            });
+            updates['shellBowl'] = [];
+          }
+          
+          updates[`players/${playerId}/hand`] = newHand;
+          updates['discardPile'] = newDiscard;
+          
+          await database.ref(`games/${roomCode}`).update(updates);
+          return;
+        }
+
+        if (card.type === 'donate') {
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            pendingAction: {
+              type: 'donate',
+              playerId: playerId,
+              cardsToGive: isCaffeinated ? 2 : 1
+            }
+          });
+          return;
+        }
+
+        if (card.type === 'fast') {
+          const updates = {
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
+            turnPhase: 'draw',
+            hungerMarker: gameState.hungerMarker
+          };
+          
+          if (isCaffeinated) {
+            const cardsToDraw = myPlayer.tools?.includes('gorilla') ? 2 : 1;
+            const newDeck = [...gameState.deck];
+            const drawnCards = newDeck.splice(0, Math.min(cardsToDraw, newDeck.length));
+            const handWithDrawn = [...newHand, ...drawnCards];
+            
+            updates[`players/${playerId}/hand`] = handWithDrawn;
+            updates['deck'] = newDeck;
+          }
+          
+          await database.ref(`games/${roomCode}`).update(updates);
+          return;
+        }
+
+        if (card.type === 'picky') {
+          const topCards = gameState.deck.slice(0, isCaffeinated ? 4 : 3);
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            pendingAction: {
+              type: 'picky',
+              playerId: playerId,
+              topCards: topCards,
+              isCaffeinated: isCaffeinated,
+              reorderedCards: null
+            }
+          });
+          return;
+        }
+
+        if (card.type === 'raccoon') {
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard,
+            pendingAction: {
+              type: 'raccoon',
+              playerId: playerId,
+              isCaffeinated: isCaffeinated,
+              action: null
+            }
+          });
+          return;
+        }
+
+        if (card.category === 'tool') {
+          const newTools = [...(myPlayer.tools || []), card.type];
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            [`players/${playerId}/tools`]: newTools
+          });
+          return;
+        }
+
+        if (card.category === 'edible') {
+          // Check if pesky pistachio needs nutcracker
+          if (card.type === 'pesky' && !myPlayer.tools?.includes('nutcracker')) {
+            setError('Cannot eat Pesky Pistachio without a Nutcracker!');
+            return;
+          }
+          
+          if (multiEatMode) {
+            if (selectedEdibleIndices.includes(card.id)) {
+              setSelectedEdibleIndices(selectedEdibleIndices.filter(i => i !== card.id));
+            } else {
+              setSelectedEdibleIndices([...selectedEdibleIndices, card.id]);
+            }
+            return;
+          }
+          
+          const updates = {
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard
+          };
+          
+          if (gameState.pendingAction?.type === 'moldy' && gameState.pendingAction.playerId === playerId) {
+            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+            updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
+            updates['pendingAction'] = null;
+          }
+          else if (gameState.goldenPistachioEvent && 
+              gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
+              !gameState.goldenPistachioEvent.responses?.[playerId]) {
+            updates[`goldenPistachioEvent/responses/${playerId}`] = 'ate';
+            
+            const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'ate'};
+            const allResponded = gameState.goldenPistachioEvent.playersNeedingResponse.every(pid => responses[pid]);
+            if (allResponded) {
+              updates['goldenPistachioEvent'] = null;
+            }
+          } else if (gameState.hungerMarker) {
+            updates['hungerMarker'] = false;
+          } else {
+            updates['hungerMarker'] = true;
+          }
+          
+          await database.ref(`games/${roomCode}`).update(updates);
+
+          if (card.type === 'golden') {
+            const newGoldenDeck = [...(gameState.goldenDeck || [])];
+            const goldenShell = newGoldenDeck.shift();
+            if (goldenShell) {
+              const newGoldenShells = [...(myPlayer.goldenShells || []), goldenShell];
+              await database.ref(`games/${roomCode}`).update({
+                [`players/${playerId}/goldenShells`]: newGoldenShells,
+                goldenDeck: newGoldenDeck
+              });
+
+              if (newGoldenShells.length >= 3) {
+                await database.ref(`games/${roomCode}`).update({
+                  status: 'finished',
+                  winner: playerId,
+                  winType: 'golden'
+                });
+                return;
+              }
+            }
+
+            const otherPlayers = Object.keys(gameState.players).filter(pid => 
+              pid !== playerId && 
+              gameState.players[pid].connected && 
+              !gameState.players[pid].eliminated
+            );
+            
+            if (otherPlayers.length > 0) {
+              await database.ref(`games/${roomCode}`).update({
+                goldenPistachioEvent: {
+                  playedBy: playerId,
+                  playersNeedingResponse: otherPlayers,
+                  responses: {}
+                }
+              });
+            }
+          } else if (card.type === 'raisin') {
+            const newTokens = Math.min(10, myPlayer.energyTokens + 1);
+            await database.ref(`games/${roomCode}/players/${playerId}/energyTokens`).set(newTokens);
+          }
+          return;
+        }
+
+        await database.ref(`games/${roomCode}`).update({
+          [`players/${playerId}/hand`]: newHand,
+          discardPile: newDiscard
+        });
+      };<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -163,6 +369,7 @@
           goldenDeck: [],
           discardPile: [],
           shellBowl: [],
+          tokenBowl: 0,
           hungerMarker: false,
           currentPlayerIndex: 0,
           turnPhase: 'draw',
@@ -289,13 +496,22 @@
         const newTokens = myPlayer.energyTokens - overCount;
         
         const updates = {
-          [`players/${playerId}/energyTokens`]: newTokens
+          [`players/${playerId}/energyTokens`]: newTokens,
+          tokenBowl: (gameState.tokenBowl || 0) + overCount
         };
         
         if (newTokens === 0) {
           const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
           updates[`players/${playerId}/eliminated`] = true;
           updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
+          
+          // Check for last player standing
+          const remainingPlayers = players.filter(p => p.id !== playerId);
+          if (remainingPlayers.length === 1) {
+            updates['status'] = 'finished';
+            updates['winner'] = remainingPlayers[0].id;
+            updates['winType'] = 'lastStanding';
+          }
         }
         
         await database.ref(`games/${roomCode}`).update(updates);
@@ -316,15 +532,25 @@
           }
           
           const newTokens = myPlayer.energyTokens - 1;
-          await database.ref(`games/${roomCode}`).update({
+          const updates = {
             [`players/${playerId}/energyTokens`]: newTokens,
+            tokenBowl: (gameState.tokenBowl || 0) + 1,
             hungerMarker: false
-          });
+          };
           
           if (newTokens === 0) {
-            await database.ref(`games/${roomCode}/players/${playerId}/eliminated`).set(true);
+            updates[`players/${playerId}/eliminated`] = true;
+            
+            // Check for last player standing
+            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
+            if (players.length === 1) {
+              updates['status'] = 'finished';
+              updates['winner'] = players[0].id;
+              updates['winType'] = 'lastStanding';
+            }
           }
           
+          await database.ref(`games/${roomCode}`).update(updates);
           setError('');
         }
       };
@@ -334,6 +560,14 @@
         
         const myPlayer = gameState.players[playerId];
         const cardsToEat = selectedEdibleIndices.map(idx => myPlayer.hand[idx]);
+        
+        // Check if any pesky pistachios need nutcracker
+        const hasPesky = cardsToEat.some(c => c.type === 'pesky');
+        if (hasPesky && !myPlayer.tools?.includes('nutcracker')) {
+          setError('Cannot eat Pesky Pistachio without a Nutcracker!');
+          return;
+        }
+        
         const newHand = myPlayer.hand.filter((_, idx) => !selectedEdibleIndices.includes(idx));
         const newDiscard = [...(gameState.discardPile || []), ...cardsToEat];
         
@@ -420,7 +654,16 @@
         const drawnCards = newDeck.splice(0, Math.min(cardsToDraw, newDeck.length));
         
         const moldyCards = drawnCards.filter(card => card.type === 'moldy');
+        const looseCards = drawnCards.filter(card => card.type === 'loose');
         const nonMoldyCards = drawnCards.filter(card => card.type !== 'moldy');
+        
+        // Loose pistachios grant an extra draw
+        let extraCards = [];
+        if (looseCards.length > 0 && newDeck.length > 0) {
+          extraCards = newDeck.splice(0, looseCards.length);
+          nonMoldyCards.push(...extraCards.filter(c => c.type !== 'moldy'));
+          moldyCards.push(...extraCards.filter(c => c.type === 'moldy'));
+        }
         
         const newHand = [...(myPlayer.hand || []), ...nonMoldyCards];
         
@@ -437,6 +680,10 @@
               count: moldyCards.length
             }
           });
+          
+          if (looseCards.length > 0) {
+            setError(`Drew ${looseCards.length} Loose Pistachio(s) - got ${looseCards.length} extra card(s)!`);
+          }
         } else {
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
@@ -445,6 +692,10 @@
             turnPhase: 'draw',
             hungerMarker: false
           });
+          
+          if (looseCards.length > 0) {
+            setError(`Drew ${looseCards.length} Loose Pistachio(s) - got ${looseCards.length} extra card(s)!`);
+          }
         }
       };
 
@@ -488,6 +739,75 @@
 
         const newDiscard = [...(gameState.discardPile || []), ...cardsToDiscard];
 
+        // Check if card can be slapped
+        const canBeSlapped = !['golden', 'gorilla', 'nutcracker', 'slap', 'caffeinated'].includes(card.type);
+        
+        // If card can be slapped, create slap window
+        if (canBeSlapped) {
+          const slapWindowData = {
+            playerId: playerId,
+            playerName: myPlayer.name,
+            card: card,
+            cardIndex: cardIndex,
+            isCaffeinated: isCaffeinated,
+            cardsToDiscard: cardsToDiscard,
+            newHand: newHand,
+            timestamp: Date.now(),
+            canBeSlapped: true
+          };
+          
+          await database.ref(`games/${roomCode}/slapWindow`).set(slapWindowData);
+          
+          // Close slap window after 4 seconds if no one slaps
+          setTimeout(async () => {
+            const currentState = await database.ref(`games/${roomCode}/slapWindow`).once('value');
+            const slapData = currentState.val();
+            if (slapData && slapData.timestamp === slapWindowData.timestamp) {
+              // No one slapped, proceed with card effect
+              await database.ref(`games/${roomCode}/slapWindow`).set(null);
+              // Re-call playCard logic but bypass slap window
+              await executeCardLogic(card, isCaffeinated, newHand, newDiscard);
+            }
+          }, 4000);
+          
+          return;
+        }
+
+        // If playing a slap card
+        if (card.type === 'slap') {
+          // Check if there's an active slap window
+          if (gameState.slapWindow && gameState.slapWindow.canBeSlapped) {
+            // Check if slap can be slapped back
+            const targetWasCaffeinated = gameState.slapWindow.isCaffeinated;
+            if (targetWasCaffeinated && !isCaffeinated) {
+              setError('Cannot slap a caffeinated card without caffeine!');
+              return;
+            }
+            
+            // Slap successful! Cancel the target card
+            await database.ref(`games/${roomCode}`).update({
+              [`players/${playerId}/hand`]: newHand,
+              discardPile: [...(gameState.discardPile || []), ...gameState.slapWindow.cardsToDiscard, ...cardsToDiscard],
+              [`players/${gameState.slapWindow.playerId}/hand`]: gameState.slapWindow.newHand,
+              slapWindow: null
+            });
+            
+            setError(`Slapped ${gameState.slapWindow.playerName}'s ${gameState.slapWindow.card.type}!`);
+            return;
+          } else {
+            setError('No card to slap right now!');
+            return;
+          }
+        }
+
+        // Cards that bypass slap window
+        await executeCardLogic(card, isCaffeinated, newHand, newDiscard);
+      };
+
+      const executeCardLogic = async (card, isCaffeinated, newHand, newDiscard) => {
+        const myPlayer = gameState.players[playerId];
+        const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+
         if (card.type === 'spillBowl') {
           const shellBowl = gameState.shellBowl || [];
           const updates = {};
@@ -514,6 +834,7 @@
           
           updates[`players/${playerId}/hand`] = newHand;
           updates['discardPile'] = newDiscard;
+          updates['slapWindow'] = null;
           
           await database.ref(`games/${roomCode}`).update(updates);
           return;
@@ -523,6 +844,7 @@
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard,
+            slapWindow: null,
             pendingAction: {
               type: 'donate',
               playerId: playerId,
@@ -536,6 +858,7 @@
           const updates = {
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard,
+            slapWindow: null,
             currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
             turnPhase: 'draw',
             hungerMarker: gameState.hungerMarker
@@ -560,6 +883,7 @@
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard,
+            slapWindow: null,
             pendingAction: {
               type: 'picky',
               playerId: playerId,
@@ -575,6 +899,7 @@
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard,
+            slapWindow: null,
             pendingAction: {
               type: 'raccoon',
               playerId: playerId,
@@ -589,7 +914,8 @@
           const newTools = [...(myPlayer.tools || []), card.type];
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
-            [`players/${playerId}/tools`]: newTools
+            [`players/${playerId}/tools`]: newTools,
+            slapWindow: null
           });
           return;
         }
@@ -725,16 +1051,27 @@
           const newShellBowl = [...(gameState.shellBowl || []), myPlayer.colorIndex];
           const newTokens = myPlayer.energyTokens - 1;
 
-          await database.ref(`games/${roomCode}`).update({
+          const updates = {
             [`players/${playerId}/hand`]: newHand,
             [`players/${playerId}/energyTokens`]: newTokens,
+            tokenBowl: (gameState.tokenBowl || 0) + 1,
             shellBowl: newShellBowl,
             discardPile: [...(gameState.discardPile || []), ...cardsToDiscard]
-          });
+          };
 
           if (newTokens === 0) {
-            await database.ref(`games/${roomCode}/players/${playerId}/eliminated`).set(true);
+            updates[`players/${playerId}/eliminated`] = true;
+            
+            // Check for last player standing
+            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
+            if (players.length === 1) {
+              updates['status'] = 'finished';
+              updates['winner'] = players[0].id;
+              updates['winType'] = 'lastStanding';
+            }
           }
+
+          await database.ref(`games/${roomCode}`).update(updates);
           
           setShellBowlMode(false);
           setSelectedShellIndices([]);
@@ -915,7 +1252,7 @@
                 <h1 className="text-6xl font-black text-yellow-900 mb-4">🎉 GAME OVER! 🎉</h1>
                 <h2 className="text-4xl font-bold text-yellow-800 mb-8">{winner?.name} WINS!</h2>
                 <p className="text-xl text-gray-700 mb-8">
-                  {gameState.winType === 'golden' ? 'Collected 3 Golden Shells!' : 'Last Player Standing!'}
+                  {gameState.winType === 'golden' ? '✨ Collected 3 Golden Shells!' : gameState.winType === 'lastStanding' ? '💪 Last Player Standing!' : 'Victory!'}
                 </p>
                 <button
                   onClick={() => {
@@ -992,6 +1329,45 @@
                 </div>
               )}
 
+              {gameState.slapWindow && gameState.slapWindow.playerId !== playerId && (
+                <div className="bg-red-50 border-4 border-red-600 rounded-xl p-4 mb-4 animate-pulse">
+                  <div className="text-center">
+                    <h4 className="text-2xl font-black text-red-900">👋 SLAP OPPORTUNITY! 👋</h4>
+                    <p className="text-sm text-red-700 mt-1 mb-3">
+                      {gameState.slapWindow.playerName} is playing: <span className="font-bold">{gameState.slapWindow.card.type.toUpperCase()}</span>
+                      {gameState.slapWindow.isCaffeinated && <span className="text-yellow-600"> (☕ CAFFEINATED)</span>}
+                    </p>
+                    {(() => {
+                      const myHand = gameState.players[playerId]?.hand || [];
+                      const hasSlap = myHand.some(c => c.type === 'slap');
+                      const hasCaffeine = myHand.some(c => c.type === 'caffeinated');
+                      const canSlap = hasSlap && (!gameState.slapWindow.isCaffeinated || hasCaffeine);
+                      
+                      if (canSlap) {
+                        return (
+                          <button
+                            onClick={async () => {
+                              const slapCard = myHand.find(c => c.type === 'slap');
+                              const slapIndex = myHand.findIndex(c => c.type === 'slap');
+                              if (slapCard) {
+                                await playCard(slapIndex);
+                              }
+                            }}
+                            className="bg-red-600 hover:bg-red-700 text-white font-black text-xl py-4 px-8 rounded-xl transition-all transform hover:scale-110"
+                          >
+                            👋 SLAP IT!
+                          </button>
+                        );
+                      } else if (!hasSlap) {
+                        return <p className="text-xs text-red-600">You don't have a Slap card</p>;
+                      } else if (gameState.slapWindow.isCaffeinated && !hasCaffeine) {
+                        return <p className="text-xs text-red-600">Need Caffeine to slap a caffeinated card!</p>;
+                      }
+                    })()}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-3 gap-4 mb-4">
                 <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                   <h3 className="font-bold text-amber-900 mb-2">Main Deck</h3>
@@ -1045,6 +1421,20 @@
                   <div className="bg-amber-50 rounded-xl p-4 border-2 border-amber-900">
                     <h3 className="font-bold text-amber-900 mb-2">Shell Bowl</h3>
                     <div className="flex gap-1">
+                      {[0,1,2,3,4].map(i => (
+                        <div 
+                          key={i}
+                          className="w-6 h-6 rounded-full border-2"
+                          style={
+                            i < (gameState.shellBowl?.length || 0)
+                              ? { backgroundColor: PLAYER_COLORS[gameState.shellBowl[i]], borderColor: '#78350f' }
+                              : { backgroundColor: 'white', borderColor: '#fbbf24' }
+                          }
+                        />
+                      ))}
+                    </div>
+                    <div className="text-xs text-amber-700 mt-1">{gameState.shellBowl?.length || 0}/5</div>
+                  </div>
                       {[0,1,2,3,4].map(i => (
                         <div 
                           key={i}
@@ -1382,7 +1772,7 @@
               )}
 
               <div className="text-center text-white text-sm mt-4">
-                Groups 1-3 Fixes: Overencumbered, Moldy, Raccoon, Donate, Picky, Multi-Eat, Golden Shells Hand Limit, Fast+Caffeine
+                ✅ ALL CRITICAL & IMPORTANT FIXES COMPLETE! Pesky needs Nutcracker • Loose draws extra • Last Standing win • Token Bowl • Multi-card Donate
               </div>
             </div>
           </div>
@@ -1522,7 +1912,22 @@
                                   setSelectedShellIndices([...selectedShellIndices, idx]);
                                 }
                               } else if (gameState.pendingAction?.type === 'donate' && gameState.pendingAction.playerId === playerId) {
-                                await database.ref(`games/${roomCode}/pendingAction/selectedCardIndex`).set(idx);
+                                const selectedIndices = gameState.pendingAction.selectedCardIndices || [];
+                                const cardsNeeded = gameState.pendingAction.cardsToGive;
+                                
+                                if (selectedIndices.includes(idx)) {
+                                  // Deselect
+                                  await database.ref(`games/${roomCode}/pendingAction/selectedCardIndices`).set(
+                                    selectedIndices.filter(i => i !== idx)
+                                  );
+                                } else if (selectedIndices.length < cardsNeeded) {
+                                  // Select
+                                  await database.ref(`games/${roomCode}/pendingAction/selectedCardIndices`).set(
+                                    [...selectedIndices, idx]
+                                  );
+                                } else {
+                                  setError(`Already selected ${cardsNeeded} card(s)!`);
+                                }
                               } else if (!canPlayCard) {
                                 setError('You must pay the overencumbered penalty first!');
                               } else {
@@ -1534,7 +1939,7 @@
                                 ? 'border-green-500 border-4 ring-2 ring-green-400'
                                 : shellBowlMode && selectedShellIndices.includes(idx)
                                 ? 'border-amber-500 border-4 ring-2 ring-amber-400'
-                                : gameState.pendingAction?.selectedCardIndex === idx 
+                                : gameState.pendingAction?.type === 'donate' && gameState.pendingAction.selectedCardIndices?.includes(idx)
                                 ? 'border-blue-500 border-4 ring-2 ring-blue-400' 
                                 : selectedCaffeineIndex === idx
                                 ? 'border-yellow-500 border-4 ring-2 ring-yellow-400'
@@ -1589,6 +1994,14 @@
                             
                             if (newTokens === 0) {
                               updates[`players/${playerId}/eliminated`] = true;
+                              
+                              // Check for last player standing
+                              const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
+                              if (players.length === 1) {
+                                updates['status'] = 'finished';
+                                updates['winner'] = players[0].id;
+                                updates['winType'] = 'lastStanding';
+                              }
                             }
                             
                             const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'paid'};
@@ -1699,14 +2112,14 @@
                           <div className="text-center mb-3">
                             <h4 className="text-lg font-bold text-blue-900">🎁 DONATE! 🎁</h4>
                             <p className="text-sm text-blue-700 mt-1">
-                              {gameState.pendingAction.selectedCardIndex === undefined 
-                                ? `Select ${gameState.pendingAction.cardsToGive} card(s) from your hand to donate`
+                              {!gameState.pendingAction.selectedCardIndices || gameState.pendingAction.selectedCardIndices.length < gameState.pendingAction.cardsToGive
+                                ? `Select ${gameState.pendingAction.cardsToGive} card(s) from your hand to donate (${(gameState.pendingAction.selectedCardIndices || []).length}/${gameState.pendingAction.cardsToGive} selected)`
                                 : 'Now select which opponent receives the card(s)'}
                             </p>
                           </div>
                           
-                          {gameState.pendingAction.selectedCardIndex === undefined ? (
-                            <p className="text-xs text-center text-blue-600">Click a card above to select it</p>
+                          {!gameState.pendingAction.selectedCardIndices || gameState.pendingAction.selectedCardIndices.length < gameState.pendingAction.cardsToGive ? (
+                            <p className="text-xs text-center text-blue-600">Click card(s) above to select them</p>
                           ) : (
                             <div className="grid grid-cols-2 gap-2">
                               {Object.values(gameState.players)
@@ -1715,10 +2128,10 @@
                                   <button
                                     key={player.id}
                                     onClick={async () => {
-                                      const cardIndex = gameState.pendingAction.selectedCardIndex;
-                                      const cardToDonate = myPlayer.hand[cardIndex];
-                                      const newMyHand = myPlayer.hand.filter((_, i) => i !== cardIndex);
-                                      const newOpponentHand = [...player.hand, cardToDonate];
+                                      const cardIndices = gameState.pendingAction.selectedCardIndices;
+                                      const cardsToDonate = cardIndices.map(idx => myPlayer.hand[idx]);
+                                      const newMyHand = myPlayer.hand.filter((_, i) => !cardIndices.includes(i));
+                                      const newOpponentHand = [...player.hand, ...cardsToDonate];
                                       
                                       await database.ref(`games/${roomCode}`).update({
                                         [`players/${playerId}/hand`]: newMyHand,
@@ -1726,7 +2139,7 @@
                                         pendingAction: null
                                       });
                                       
-                                      setError(`Donated ${cardToDonate.type} to ${player.name}!`);
+                                      setError(`Donated ${cardsToDonate.length} card(s) to ${player.name}!`);
                                     }}
                                     className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg"
                                   >
