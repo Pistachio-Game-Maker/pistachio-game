@@ -594,9 +594,13 @@
 
         const newDiscard = [...(gameState.discardPile || []), ...cardsToDiscard];
 
-        const canBeSlapped = !['gorilla', 'nutcracker', 'caffeinated'].includes(card.type);
+        // Most cards can be slapped, with special rules for gorillas
+const canBeSlapped = !['golden', 'nutcracker', 'caffeinated'].includes(card.type);
+
+// Special case: gorillas can only be slapped with caffeine
+const isGorillaRequiringCaffeine = card.type === 'gorilla' && !isCaffeinated;
         
-        if (canBeSlapped) {
+        if (canBeSlapped && !isGorillaRequiringCaffeine) {
           const slapWindowData = {
             playerId: playerId,
             playerName: myPlayer.name,
@@ -606,7 +610,8 @@
             cardsToDiscard: cardsToDiscard,
             newHand: newHand,
             timestamp: Date.now(),
-            canBeSlapped: true
+            canBeSlapped: true,
+            requiresCaffeine: card.type === 'gorilla'  // Flag that gorilla needs caffeine to slap
           };
           
           await database.ref(`games/${roomCode}/slapWindow`).set(slapWindowData);
@@ -626,8 +631,15 @@
         if (card.type === 'slap') {
           if (gameState.slapWindow && gameState.slapWindow.canBeSlapped) {
             const targetWasCaffeinated = gameState.slapWindow.isCaffeinated;
+            const targetRequiresCaffeine = gameState.slapWindow.requiresCaffeine;
+            
             if (targetWasCaffeinated && !isCaffeinated) {
               setError('Cannot slap a caffeinated card without caffeine!');
+              return;
+            }
+            
+            if (targetRequiresCaffeine && !isCaffeinated) {
+              setError('Cannot slap a Gorilla without caffeine!');
               return;
             }
             
