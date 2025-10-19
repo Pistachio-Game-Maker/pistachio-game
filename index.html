@@ -460,6 +460,11 @@
           if (bonusDraws > 0) {
             setError(`Drew ${bonusDraws} extra card(s) from Loose Pistachios!`);
           }
+          
+          // Trigger reshuffle notification if needed
+          if (willEmptyDeck && gameState.discardPile && gameState.discardPile.length > 0) {
+            setError('⚠️ Last card drawn! Deck will reshuffle next draw - all players lose 1 energy!');
+          }
         } else {
           await database.ref(`games/${roomCode}`).update({
             [`players/${playerId}/hand`]: newHand,
@@ -472,6 +477,11 @@
           
           if (bonusDraws > 0) {
             setError(`Drew ${bonusDraws} extra card(s) from Loose Pistachios!`);
+          }
+          
+          // Trigger reshuffle notification if needed
+          if (willEmptyDeck && gameState.discardPile && gameState.discardPile.length > 0) {
+            setError('⚠️ Last card drawn! Deck will reshuffle next draw - all players lose 1 energy!');
           }
         }
       };
