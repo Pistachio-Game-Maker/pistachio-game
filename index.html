@@ -534,7 +534,7 @@
             updates['goldenPistachioEvent'] = null;
           }
         } else if (gameState.hungerMarker) {
-          updates['hungerMarker'] = false;
+          updates['hungerMarker'] = true;
         } else {
           updates['hungerMarker'] = true;
         }
@@ -594,7 +594,7 @@
 
         const newDiscard = [...(gameState.discardPile || []), ...cardsToDiscard];
 
-        const canBeSlapped = !['gorilla', 'nutcracker', 'slap', 'caffeinated'].includes(card.type);
+        const canBeSlapped = !['gorilla', 'nutcracker', 'caffeinated'].includes(card.type);
         
         if (canBeSlapped) {
           const slapWindowData = {
@@ -926,12 +926,40 @@
           };
 
           if (newTokens === 0) {
+            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
             updates[`players/${playerId}/eliminated`] = true;
             
-            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
-            if (players.length === 1) {
+            // Discard tools and golden shells
+            const deadPlayerHand = myPlayer.hand || [];
+            const deadPlayerTools = myPlayer.tools || [];
+            const deadPlayerGoldenShells = myPlayer.goldenShells || [];
+            
+            const toolsAndShells = [...deadPlayerTools.map(t => ({ type: t, category: 'tool', id: `${t}-discarded` })), 
+                                     ...deadPlayerGoldenShells];
+            
+            // Distribute hand to players counter-clockwise starting from previous player
+            const currentIndex = gameState.currentPlayerIndex;
+            const previousIndex = (currentIndex - 1 + players.length) % players.length;
+            
+            let cardIndex = 0;
+            for (let i = 0; i < players.length - 1; i++) {
+              const playerIndex = (previousIndex - i + players.length) % players.length;
+              const targetPlayer = players[playerIndex];
+              if (targetPlayer.id !== playerId && cardIndex < deadPlayerHand.length) {
+                const cardToGive = deadPlayerHand[cardIndex];
+                updates[`players/${targetPlayer.id}/hand`] = [...(targetPlayer.hand || []), cardToGive];
+                cardIndex++;
+              }
+            }
+            
+            // Rest of hand goes to discard
+            const remainingCards = deadPlayerHand.slice(cardIndex);
+            updates['discardPile'] = [...(gameState.discardPile || []), ...toolsAndShells, ...remainingCards];
+            
+            const remainingPlayers = players.filter(p => p.id !== playerId);
+            if (remainingPlayers.length === 1) {
               updates['status'] = 'finished';
-              updates['winner'] = players[0].id;
+              updates['winner'] = remainingPlayers[0].id;
               updates['winType'] = 'lastStanding';
             }
           }
@@ -1830,15 +1858,43 @@ if (screen === 'game' && gameState) {
                             updates[`goldenPistachioEvent/responses/${playerId}`] = 'paid';
                             
                             if (newTokens === 0) {
-                              updates[`players/${playerId}/eliminated`] = true;
-                              
-                              const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
-                              if (players.length === 1) {
-                                updates['status'] = 'finished';
-                                updates['winner'] = players[0].id;
-                                updates['winType'] = 'lastStanding';
-                              }
-                            }
+            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+            updates[`players/${playerId}/eliminated`] = true;
+            
+            // Discard tools and golden shells
+            const deadPlayerHand = myPlayer.hand || [];
+            const deadPlayerTools = myPlayer.tools || [];
+            const deadPlayerGoldenShells = myPlayer.goldenShells || [];
+            
+            const toolsAndShells = [...deadPlayerTools.map(t => ({ type: t, category: 'tool', id: `${t}-discarded` })), 
+                                     ...deadPlayerGoldenShells];
+            
+            // Distribute hand to players counter-clockwise starting from previous player
+            const currentIndex = gameState.currentPlayerIndex;
+            const previousIndex = (currentIndex - 1 + players.length) % players.length;
+            
+            let cardIndex = 0;
+            for (let i = 0; i < players.length - 1; i++) {
+              const playerIndex = (previousIndex - i + players.length) % players.length;
+              const targetPlayer = players[playerIndex];
+              if (targetPlayer.id !== playerId && cardIndex < deadPlayerHand.length) {
+                const cardToGive = deadPlayerHand[cardIndex];
+                updates[`players/${targetPlayer.id}/hand`] = [...(targetPlayer.hand || []), cardToGive];
+                cardIndex++;
+              }
+            }
+            
+            // Rest of hand goes to discard
+            const remainingCards = deadPlayerHand.slice(cardIndex);
+            updates['discardPile'] = [...(gameState.discardPile || []), ...toolsAndShells, ...remainingCards];
+            
+            const remainingPlayers = players.filter(p => p.id !== playerId);
+            if (remainingPlayers.length === 1) {
+              updates['status'] = 'finished';
+              updates['winner'] = remainingPlayers[0].id;
+              updates['winType'] = 'lastStanding';
+            }
+          }
                             
                             const responses = {...(gameState.goldenPistachioEvent.responses || {}), [playerId]: 'paid'};
                             const allResponded = gameState.goldenPistachioEvent.playersNeedingResponse.every(pid => responses[pid]);
@@ -2227,15 +2283,43 @@ if (screen === 'game' && gameState) {
                                 };
                                 
                                 if (newTokens === 0) {
-                                  updates[`players/${playerId}/eliminated`] = true;
-                                  
-                                  const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated && p.id !== playerId);
-                                  if (players.length === 1) {
-                                    updates['status'] = 'finished';
-                                    updates['winner'] = players[0].id;
-                                    updates['winType'] = 'lastStanding';
-                                  }
-                                }
+            const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
+            updates[`players/${playerId}/eliminated`] = true;
+            
+            // Discard tools and golden shells
+            const deadPlayerHand = myPlayer.hand || [];
+            const deadPlayerTools = myPlayer.tools || [];
+            const deadPlayerGoldenShells = myPlayer.goldenShells || [];
+            
+            const toolsAndShells = [...deadPlayerTools.map(t => ({ type: t, category: 'tool', id: `${t}-discarded` })), 
+                                     ...deadPlayerGoldenShells];
+            
+            // Distribute hand to players counter-clockwise starting from previous player
+            const currentIndex = gameState.currentPlayerIndex;
+            const previousIndex = (currentIndex - 1 + players.length) % players.length;
+            
+            let cardIndex = 0;
+            for (let i = 0; i < players.length - 1; i++) {
+              const playerIndex = (previousIndex - i + players.length) % players.length;
+              const targetPlayer = players[playerIndex];
+              if (targetPlayer.id !== playerId && cardIndex < deadPlayerHand.length) {
+                const cardToGive = deadPlayerHand[cardIndex];
+                updates[`players/${targetPlayer.id}/hand`] = [...(targetPlayer.hand || []), cardToGive];
+                cardIndex++;
+              }
+            }
+            
+            // Rest of hand goes to discard
+            const remainingCards = deadPlayerHand.slice(cardIndex);
+            updates['discardPile'] = [...(gameState.discardPile || []), ...toolsAndShells, ...remainingCards];
+            
+            const remainingPlayers = players.filter(p => p.id !== playerId);
+            if (remainingPlayers.length === 1) {
+              updates['status'] = 'finished';
+              updates['winner'] = remainingPlayers[0].id;
+              updates['winType'] = 'lastStanding';
+            }
+          }
                                 
                                 await database.ref(`games/${roomCode}`).update(updates);
                                 setError('');
