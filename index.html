@@ -365,12 +365,13 @@
         const drawnCards = newDeck.splice(0, Math.min(cardsToDraw, newDeck.length));
         
         const moldyCards = drawnCards.filter(card => card.type === 'moldy');
-        const looseCards = drawnCards.filter(card => card.type === 'loose');
         const nonMoldyCards = drawnCards.filter(card => card.type !== 'moldy');
         
+        // Check if player has bonus draws from loose pistachios played this turn
+        const bonusDraws = myPlayer.looseBonusDraws || 0;
         let extraCards = [];
-        if (looseCards.length > 0 && newDeck.length > 0) {
-          extraCards = newDeck.splice(0, looseCards.length);
+        if (bonusDraws > 0 && newDeck.length > 0) {
+          extraCards = newDeck.splice(0, Math.min(bonusDraws, newDeck.length));
           nonMoldyCards.push(...extraCards.filter(c => c.type !== 'moldy'));
           moldyCards.push(...extraCards.filter(c => c.type === 'moldy'));
         }
