@@ -120,6 +120,7 @@
       const [multiEatMode, setMultiEatMode] = useState(false);
       const [zoomedCard, setZoomedCard] = useState(null);
       const [showRules, setShowRules] = useState(false);
+      const [playedCardDisplay, setPlayedCardDisplay] = useState(null);
 
       useEffect(() => {
         if (!playerId) {
@@ -601,6 +602,12 @@ const canBeSlapped = !['golden', 'nutcracker', 'caffeinated'].includes(card.type
 const isGorillaRequiringCaffeine = card.type === 'gorilla' && !isCaffeinated;
         
         if (canBeSlapped && !isGorillaRequiringCaffeine) {
+          // Immediately update hand and discard
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            discardPile: newDiscard
+          });
+          
           const slapWindowData = {
             playerId: playerId,
             playerName: myPlayer.name,
@@ -611,19 +618,21 @@ const isGorillaRequiringCaffeine = card.type === 'gorilla' && !isCaffeinated;
             newHand: newHand,
             timestamp: Date.now(),
             canBeSlapped: true,
-            requiresCaffeine: card.type === 'gorilla'  // Flag that gorilla needs caffeine to slap
+            requiresCaffeine: card.type === 'gorilla'
           };
           
           await database.ref(`games/${roomCode}/slapWindow`).set(slapWindowData);
           
-          setTimeout(async () => {
-            const currentState = await database.ref(`games/${roomCode}/slapWindow`).once('value');
-            const slapData = currentState.val();
-            if (slapData && slapData.timestamp === slapWindowData.timestamp) {
-              await database.ref(`games/${roomCode}/slapWindow`).set(null);
-              await executeCardLogic(card, isCaffeinated, newHand, newDiscard);
-            }
-          }, 4000);
+          // Show played card overlay
+          setPlayedCardDisplay({
+            playerName: myPlayer.name,
+            cardType: card.type,
+            isCaffeinated: isCaffeinated
+          });
+          
+          setTimeout(() => {
+            setPlayedCardDisplay(null);
+          }, 2500);
           
           return;
         }
@@ -657,7 +666,17 @@ const isGorillaRequiringCaffeine = card.type === 'gorilla' && !isCaffeinated;
             return;
           }
         }
-
+// Show played card overlay for non-slappable cards
+        setPlayedCardDisplay({
+          playerName: myPlayer.name,
+          cardType: card.type,
+          isCaffeinated: isCaffeinated
+        });
+        
+        setTimeout(() => {
+          setPlayedCardDisplay(null);
+        }, 2000);
+        
         await executeCardLogic(card, isCaffeinated, newHand, newDiscard);
       };
 
@@ -1438,6 +1457,45 @@ if (screen === 'game' && gameState) {
                         return <p className="text-xs text-red-600">Need Caffeine to slap a caffeinated card!</p>;
                       }
                     })()}
+                  </div>
+                </div>
+              )}
+              {playedCardDisplay && (
+                <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 animate-pulse">
+                  <div className="bg-gradient-to-br from-purple-600 to-purple-800 rounded-3xl shadow-2xl p-8 max-w-lg border-4 border-purple-400">
+                    <h2 className="text-4xl font-black text-white text-center mb-4">
+                      🎴 CARD PLAYED! 🎴
+                    </h2>
+                    <p className="text-2xl font-bold text-purple-100 text-center mb-6">
+                      {playedCardDisplay.playerName} played:
+                    </p>
+                    <div className="flex justify-center mb-4">
+                      <div className="w-48 h-64 rounded-xl overflow-hidden border-4 border-yellow-400 shadow-2xl transform scale-110">
+                        <img 
+                          src={CARD_IMAGES[playedCardDisplay.cardType] || 'images/cards/cardBack.PNG'}
+                          alt={playedCardDisplay.cardType}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                            e.target.nextSibling.style.display = 'flex';
+                          }}
+                        />
+                        <div 
+                          className="w-full h-full bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center"
+                          style={{display: 'none'}}
+                        >
+                          <div className="text-center p-4">
+                            <div className="text-2xl font-black text-yellow-900">
+                              {playedCardDisplay.cardType.toUpperCase()}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-3xl font-black text-center text-yellow-300">
+                      {playedCardDisplay.cardType.toUpperCase()}
+                      {playedCardDisplay.isCaffeinated && <span className="text-yellow-200"> ☕ CAFFEINATED</span>}
+                    </p>
                   </div>
                 </div>
               )}
