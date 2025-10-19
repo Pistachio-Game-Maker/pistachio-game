@@ -782,7 +782,10 @@
         }
 
         if (card.category === 'edible') {
-          if (card.type === 'pesky' && !myPlayer.tools?.includes('nutcracker')) {
+          // Check if this is being discarded for moldy (not eaten)
+          const isDiscardingForMoldy = gameState.pendingAction?.type === 'moldy' && gameState.pendingAction.playerId === playerId;
+          
+          if (card.type === 'pesky' && !myPlayer.tools?.includes('nutcracker') && !isDiscardingForMoldy) {
             setError('Cannot eat Pesky Pistachio without a Nutcracker!');
             return;
           }
@@ -792,16 +795,18 @@
             discardPile: newDiscard
           };
           
-          // Loose pistachios add bonus draws at end of turn
-          if (card.type === 'loose') {
+          // Loose pistachios add bonus draws at end of turn ONLY if eaten (not discarded for moldy)
+          if (card.type === 'loose' && !isDiscardingForMoldy) {
             const currentBonus = myPlayer.looseBonusDraws || 0;
             updates[`players/${playerId}/looseBonusDraws`] = currentBonus + 1;
           }
           
-          if (gameState.pendingAction?.type === 'moldy' && gameState.pendingAction.playerId === playerId) {
+          if (isDiscardingForMoldy) {
+            // Discarding for moldy - end turn, NO hunger event
             const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
             updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
             updates['pendingAction'] = null;
+            // Do NOT set hungerMarker - this is discarding, not eating
           }
           else if (gameState.goldenPistachioEvent && 
               gameState.goldenPistachioEvent.playersNeedingResponse.includes(playerId) &&
@@ -814,7 +819,7 @@
               updates['goldenPistachioEvent'] = null;
             }
           } else if (gameState.hungerMarker) {
-            updates['hungerMarker'] = false;
+            updates['hungerMarker'] = true;
           } else {
             updates['hungerMarker'] = true;
           }
