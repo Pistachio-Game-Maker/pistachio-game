@@ -120,7 +120,7 @@
       const [multiEatMode, setMultiEatMode] = useState(false);
       const [zoomedCard, setZoomedCard] = useState(null);
       const [showRules, setShowRules] = useState(false);
-      const [playedCardDisplay, setPlayedCardDisplay] = useState(null);
+      
 
       useEffect(() => {
         if (!playerId) {
@@ -623,16 +623,18 @@ const isGorillaRequiringCaffeine = card.type === 'gorilla' && !isCaffeinated;
           
           await database.ref(`games/${roomCode}/slapWindow`).set(slapWindowData);
           
-          // Show played card overlay
-          setPlayedCardDisplay({
-            playerName: myPlayer.name,
-            cardType: card.type,
-            isCaffeinated: isCaffeinated
-          });
-          
-          setTimeout(() => {
-            setPlayedCardDisplay(null);
-          }, 2500);
+          // Show played card overlay for everyone
+await database.ref(`games/${roomCode}/playedCardDisplay`).set({
+  playerName: myPlayer.name,
+  playerId: playerId,
+  cardType: card.type,
+  isCaffeinated: isCaffeinated,
+  timestamp: Date.now()
+});
+
+setTimeout(async () => {
+  await database.ref(`games/${roomCode}/playedCardDisplay`).remove();
+}, 2500);
           
           return;
         }
@@ -666,16 +668,18 @@ const isGorillaRequiringCaffeine = card.type === 'gorilla' && !isCaffeinated;
             return;
           }
         }
-// Show played card overlay for non-slappable cards
-        setPlayedCardDisplay({
-          playerName: myPlayer.name,
-          cardType: card.type,
-          isCaffeinated: isCaffeinated
-        });
-        
-        setTimeout(() => {
-          setPlayedCardDisplay(null);
-        }, 2000);
+// Show played card overlay for everyone
+await database.ref(`games/${roomCode}/playedCardDisplay`).set({
+  playerName: myPlayer.name,
+  playerId: playerId,
+  cardType: card.type,
+  isCaffeinated: isCaffeinated,
+  timestamp: Date.now()
+});
+
+setTimeout(async () => {
+  await database.ref(`games/${roomCode}/playedCardDisplay`).remove();
+}, 2500);
         
         await executeCardLogic(card, isCaffeinated, newHand, newDiscard);
       };
@@ -1460,7 +1464,7 @@ if (screen === 'game' && gameState) {
                   </div>
                 </div>
               )}
-              {playedCardDisplay && (
+              {gameState.playedCardDisplay && gameState.playedCardDisplay.playerId !== playerId && (
                 <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 animate-pulse">
                   <div className="bg-gradient-to-br from-purple-600 to-purple-800 rounded-3xl shadow-2xl p-8 max-w-lg border-4 border-purple-400">
                     <h2 className="text-4xl font-black text-white text-center mb-4">
