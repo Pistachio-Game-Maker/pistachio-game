@@ -384,12 +384,48 @@
         }
         
         if (!gameState.deck || gameState.deck.length === 0) {
-          setError('Deck is empty!');
-          return;
+          // Reshuffle discard pile into deck
+          if (gameState.discardPile && gameState.discardPile.length > 0) {
+            const newDeck = shuffleDeck([...gameState.discardPile]);
+            const penaltyUpdates = {
+              deck: newDeck,
+              discardPile: []
+            };
+            
+            // All players lose 1 energy token
+            Object.values(gameState.players).forEach(player => {
+              if (player.connected && !player.eliminated) {
+                const newEnergy = Math.max(0, player.energyTokens - 1);
+                penaltyUpdates[`players/${player.id}/energyTokens`] = newEnergy;
+                
+                if (newEnergy === 0 && player.id !== playerId) {
+                  penaltyUpdates[`players/${player.id}/eliminated`] = true;
+                }
+              }
+            });
+            
+            await database.ref(`games/${roomCode}`).update(penaltyUpdates);
+            
+            setError('⚠️ DECK RESHUFFLED! All players lose 1 energy token!');
+            
+            // If this player is now eliminated, handle it
+            if (myPlayer.energyTokens - 1 <= 0) {
+              return;
+            }
+            
+            // Continue with draw after reshuffle
+          } else {
+            setError('Deck and discard pile are both empty!');
+            return;
+          }
         }
 
         const cardsToDraw = myPlayer.tools?.includes('gorilla') ? 2 : 1;
         const newDeck = [...gameState.deck];
+        
+        // If we're about to draw the last card(s), trigger reshuffle after
+        const willEmptyDeck = newDeck.length <= cardsToDraw;
+        
         const drawnCards = newDeck.splice(0, Math.min(cardsToDraw, newDeck.length));
         
         const moldyCards = drawnCards.filter(card => card.type === 'moldy');
@@ -548,7 +584,7 @@
 
         const newDiscard = [...(gameState.discardPile || []), ...cardsToDiscard];
 
-        const canBeSlapped = !['golden', 'gorilla', 'nutcracker', 'slap', 'caffeinated'].includes(card.type);
+        const canBeSlapped = !['gorilla', 'nutcracker', 'slap', 'caffeinated'].includes(card.type);
         
         if (canBeSlapped) {
           const slapWindowData = {
@@ -712,6 +748,26 @@
             [`players/${playerId}/hand`]: newHand,
             [`players/${playerId}/tools`]: newTools
           });
+          return;
+        }
+        
+        // Golden shells can be played from hand
+        if (card.type === 'goldenShell') {
+          const newGoldenShells = [...(myPlayer.goldenShells || []), card];
+          
+          await database.ref(`games/${roomCode}`).update({
+            [`players/${playerId}/hand`]: newHand,
+            [`players/${playerId}/goldenShells`]: newGoldenShells,
+            discardPile: newDiscard
+          });
+          
+          if (newGoldenShells.length >= 3) {
+            await database.ref(`games/${roomCode}`).update({
+              status: 'finished',
+              winner: playerId,
+              winType: 'golden'
+            });
+          }
           return;
         }
 
