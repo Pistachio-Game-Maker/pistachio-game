@@ -485,6 +485,12 @@
         const card = myPlayer.hand[cardIndex];
         if (!card) return;
 
+        // Shells cannot be played - only discarded via shell bowl
+        if (card.type === 'shell') {
+          setError('Shells cannot be played! Use the Shell Bowl to discard them.');
+          return;
+        }
+
         if (card.type === 'caffeinated') {
           setSelectedCaffeineIndex(cardIndex);
           setError('Caffeine selected! Now click another card to play it caffeinated.');
@@ -1824,10 +1830,10 @@ if (screen === 'game' && gameState) {
                         <div className="bg-blue-50 border-2 border-blue-600 rounded-xl p-4">
                           <div className="text-center mb-3">
                             <h4 className="text-lg font-bold text-blue-900">🎁 DONATE! 🎁</h4>
-                            <p className="text-sm text-blue-700 mt-1">
+                            <p className="text-sm text-blue-700 mt-1 font-bold">
                               {!gameState.pendingAction.selectedCardIndices || gameState.pendingAction.selectedCardIndices.length < gameState.pendingAction.cardsToGive
-                                ? `Select ${gameState.pendingAction.cardsToGive} card(s) from your hand to donate (${(gameState.pendingAction.selectedCardIndices || []).length}/${gameState.pendingAction.cardsToGive} selected)`
-                                : 'Now select which opponent receives the card(s)'}
+                                ? `STEP 1: Select ${gameState.pendingAction.cardsToGive} card(s) to donate (${(gameState.pendingAction.selectedCardIndices || []).length}/${gameState.pendingAction.cardsToGive} selected)`
+                                : `STEP 2: Select which player receives the card(s)`}
                             </p>
                           </div>
                           
@@ -1858,7 +1864,7 @@ if (screen === 'game' && gameState) {
                                   >
                                     <div className="flex items-center gap-2 justify-center">
                                       <div 
-                                        className="w-4 h-4 rounded-full" 
+                                        className="w-6 h-6 rounded-full border-2 border-white" 
                                         style={{ backgroundColor: PLAYER_COLORS[player.colorIndex] }}
                                       />
                                       <span>{player.name}</span>
