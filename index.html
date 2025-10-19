@@ -402,11 +402,12 @@
             deck: newDeck,
             currentPlayerIndex: (gameState.currentPlayerIndex + 1) % players.length,
             turnPhase: 'draw',
-            hungerMarker: false
+            [`players/${playerId}/looseBonusDraws`]: 0
+            // Don't touch hungerMarker here - it persists across turns
           });
           
-          if (looseCards.length > 0) {
-            setError(`Drew ${looseCards.length} Loose Pistachio(s) - got ${looseCards.length} extra card(s)!`);
+          if (bonusDraws > 0) {
+            setError(`Drew ${bonusDraws} extra card(s) from Loose Pistachios!`);
           }
         }
       };
