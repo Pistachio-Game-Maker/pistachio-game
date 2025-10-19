@@ -310,6 +310,34 @@
         if (newTokens === 0) {
           const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
           updates[`players/${playerId}/eliminated`] = true;
+          
+          // Discard tools and golden shells
+          const deadPlayerHand = myPlayer.hand || [];
+          const deadPlayerTools = myPlayer.tools || [];
+          const deadPlayerGoldenShells = myPlayer.goldenShells || [];
+          
+          const toolsAndShells = [...deadPlayerTools.map(t => ({ type: t, category: 'tool', id: `${t}-discarded` })), 
+                                   ...deadPlayerGoldenShells];
+          
+          // Distribute hand to players counter-clockwise starting from previous player
+          const currentIndex = gameState.currentPlayerIndex;
+          const previousIndex = (currentIndex - 1 + players.length) % players.length;
+          
+          let cardIndex = 0;
+          for (let i = 0; i < players.length - 1; i++) {
+            const playerIndex = (previousIndex - i + players.length) % players.length;
+            const targetPlayer = players[playerIndex];
+            if (targetPlayer.id !== playerId && cardIndex < deadPlayerHand.length) {
+              const cardToGive = deadPlayerHand[cardIndex];
+              updates[`players/${targetPlayer.id}/hand`] = [...(targetPlayer.hand || []), cardToGive];
+              cardIndex++;
+            }
+          }
+          
+          // Rest of hand goes to discard
+          const remainingCards = deadPlayerHand.slice(cardIndex);
+          updates['discardPile'] = [...(gameState.discardPile || []), ...toolsAndShells, ...remainingCards];
+          
           updates['currentPlayerIndex'] = (gameState.currentPlayerIndex + 1) % players.length;
           
           const remainingPlayers = players.filter(p => p.id !== playerId);
