@@ -432,6 +432,13 @@
           discardPile: newDiscard
         };
         
+        // Count loose pistachios for bonus draws
+        const looseCount = cardsToEat.filter(c => c.type === 'loose').length;
+        if (looseCount > 0) {
+          const currentBonus = myPlayer.looseBonusDraws || 0;
+          updates[`players/${playerId}/looseBonusDraws`] = currentBonus + looseCount;
+        }
+        
         if (cardsToEat.length >= 2) {
           const newTokens = Math.min(10, myPlayer.energyTokens + 1);
           updates[`players/${playerId}/energyTokens`] = newTokens;
@@ -690,6 +697,12 @@
             [`players/${playerId}/hand`]: newHand,
             discardPile: newDiscard
           };
+          
+          // Loose pistachios add bonus draws at end of turn
+          if (card.type === 'loose') {
+            const currentBonus = myPlayer.looseBonusDraws || 0;
+            updates[`players/${playerId}/looseBonusDraws`] = currentBonus + 1;
+          }
           
           if (gameState.pendingAction?.type === 'moldy' && gameState.pendingAction.playerId === playerId) {
             const players = Object.values(gameState.players).filter(p => p.connected && !p.eliminated);
