@@ -385,6 +385,7 @@
             [`players/${playerId}/hand`]: newHand,
             deck: newDeck,
             discardPile: newDiscard,
+            [`players/${playerId}/looseBonusDraws`]: 0,
             pendingAction: {
               type: 'moldy',
               playerId: playerId,
@@ -392,8 +393,8 @@
             }
           });
           
-          if (looseCards.length > 0) {
-            setError(`Drew ${looseCards.length} Loose Pistachio(s) - got ${looseCards.length} extra card(s)!`);
+          if (bonusDraws > 0) {
+            setError(`Drew ${bonusDraws} extra card(s) from Loose Pistachios!`);
           }
         } else {
           await database.ref(`games/${roomCode}`).update({
